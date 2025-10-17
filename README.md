@@ -8,7 +8,7 @@ Modules:
 
 Python3.x based, for run install Python from official site
 
-After go to project directory, go to source folder and run:
+After go to project directory, open terminal and run:
 
 <code>pip3 install -r requirements.txt</code><br>
 <code>python main.py</code>
