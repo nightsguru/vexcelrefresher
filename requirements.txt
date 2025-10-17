@@ -1,0 +1,5 @@
+httpx
+tkinterdnd2
+Pillow
+pystray
+
