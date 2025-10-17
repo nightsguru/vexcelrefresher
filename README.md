@@ -10,7 +10,7 @@ Python3.x based, for run install Python from official site
 
 After go to project directory, go to source folder and run:
 
-<code>pip3 install -r requirements.txt</code>
+<code>pip3 install -r requirements.txt</code><br>
 <code>python main.py</code>
 
 Buy me a coffe: <code>bc1qymkdffjpqkstdwu9t2kx7gu5384myhtph23ksu</code>
