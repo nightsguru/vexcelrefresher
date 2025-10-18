@@ -116,7 +116,7 @@ class CookieRefresher:
                 cookies = {".ROBLOSECURITY": auth_cookie}
                 
                 req = httpx.post("https://auth.roblox.com/v1/authentication-ticket",
-                                headers=headers, cookies=cookies, json={}, proxies=proxy,
+                                headers=headers, cookies=cookies, json={}, proxy=list(proxy.values())[0],
                                 timeout=httpx.Timeout(30.0, connect=10.0))
                 
                 if req.status_code == 401:
@@ -142,7 +142,7 @@ class CookieRefresher:
                 headers.update({"RBXAuthenticationNegotiation": "1"})
                 
                 req1 = httpx.post("https://auth.roblox.com/v1/authentication-ticket/redeem",
-                                headers=headers, json={"authenticationTicket": auth_ticket}, proxies=proxy,
+                                headers=headers, json={"authenticationTicket": auth_ticket}, proxy=list(proxy.values())[0],
                                 timeout=httpx.Timeout(30.0, connect=10.0))
                 
                 if req1.status_code == 401:
