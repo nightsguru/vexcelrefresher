@@ -30,9 +30,12 @@ class CookieRefresher:
     def check_proxy(self, proxy_string):
         try:
             proxy_formatted = self.format_proxy(proxy_string)
-            proxy = {"http://": proxy_formatted, "https://": proxy_formatted}
             timeout = httpx.Timeout(10.0, connect=5.0)
-            response = httpx.get("https://www.roblox.com", proxies=proxy, timeout=timeout)
+            try:
+                response = httpx.get("https://www.roblox.com", proxy=proxy_formatted, timeout=timeout)
+            except TypeError:
+                proxy = {"http://": proxy_formatted, "https://": proxy_formatted}
+                response = httpx.get("https://www.roblox.com", proxies=proxy, timeout=timeout)
             return response.status_code == 200
         except:
             return False
@@ -60,12 +63,21 @@ class CookieRefresher:
         proxy_string = self.format_proxy(random.choice(self.working_proxies))
         return {"http://": proxy_string, "https://": proxy_string}
     
-    def generate_csrf_token(self, auth_cookie, proxy):
-        csrf_req = httpx.get("https://www.roblox.com/home",
-                             cookies={".ROBLOSECURITY": auth_cookie},
-                             proxies=proxy,
-                             timeout=httpx.Timeout(30.0, connect=10.0),
-                             follow_redirects=True)
+    def generate_csrf_token(self, auth_cookie, proxy_dict):
+        proxy_str = list(proxy_dict.values())[0] if isinstance(proxy_dict, dict) else proxy_dict
+        timeout = httpx.Timeout(30.0, connect=10.0)
+        try:
+            csrf_req = httpx.get("https://www.roblox.com/home",
+                                 cookies={".ROBLOSECURITY": auth_cookie},
+                                 proxy=proxy_str,
+                                 timeout=timeout,
+                                 follow_redirects=True)
+        except TypeError:
+            csrf_req = httpx.get("https://www.roblox.com/home",
+                                 cookies={".ROBLOSECURITY": auth_cookie},
+                                 proxies=proxy_dict,
+                                 timeout=timeout,
+                                 follow_redirects=True)
         
         if csrf_req.status_code not in [200, 302]:
             raise Exception(f"Failed to fetch CSRF token. Status code: {csrf_req.status_code}")
@@ -115,9 +127,16 @@ class CookieRefresher:
                 }
                 cookies = {".ROBLOSECURITY": auth_cookie}
                 
-                req = httpx.post("https://auth.roblox.com/v1/authentication-ticket",
-                                headers=headers, cookies=cookies, json={}, proxy=list(proxy.values())[0],
-                                timeout=httpx.Timeout(30.0, connect=10.0))
+                proxy_str = list(proxy.values())[0]
+                timeout = httpx.Timeout(30.0, connect=10.0)
+                try:
+                    req = httpx.post("https://auth.roblox.com/v1/authentication-ticket",
+                                    headers=headers, cookies=cookies, json={}, proxy=proxy_str,
+                                    timeout=timeout)
+                except TypeError:
+                    req = httpx.post("https://auth.roblox.com/v1/authentication-ticket",
+                                    headers=headers, cookies=cookies, json={}, proxies=proxy,
+                                    timeout=timeout)
                 
                 if req.status_code == 401:
                     log_callback(f"✗ Unauthorized (401). Cookie is invalid.\n\n")
@@ -141,9 +160,14 @@ class CookieRefresher:
                 
                 headers.update({"RBXAuthenticationNegotiation": "1"})
                 
-                req1 = httpx.post("https://auth.roblox.com/v1/authentication-ticket/redeem",
-                                headers=headers, json={"authenticationTicket": auth_ticket}, proxy=list(proxy.values())[0],
-                                timeout=httpx.Timeout(30.0, connect=10.0))
+                try:
+                    req1 = httpx.post("https://auth.roblox.com/v1/authentication-ticket/redeem",
+                                    headers=headers, json={"authenticationTicket": auth_ticket}, proxy=proxy_str,
+                                    timeout=timeout)
+                except TypeError:
+                    req1 = httpx.post("https://auth.roblox.com/v1/authentication-ticket/redeem",
+                                    headers=headers, json={"authenticationTicket": auth_ticket}, proxies=proxy,
+                                    timeout=timeout)
                 
                 if req1.status_code == 401:
                     log_callback(f"✗ Unauthorized (401). Cookie is invalid.\n\n")
