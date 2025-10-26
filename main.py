@@ -148,13 +148,28 @@ class CookieRefresher:
     
     def validate_proxy(self, proxy):
         """Validate proxy format"""
-        pattern = r'^(?:http://)?[\w\.-]+:\d+(?::[\w]+:[\w]+)?$'
-        return bool(re.match(pattern, proxy))
+        # Support both formats: ip:port:user:pass and user:pass@ip:port
+        pattern1 = r'^(?:http://)?[\w\.-]+:\d+(?::[\w]+:[\w]+)?$'  # ip:port or ip:port:user:pass
+        pattern2 = r'^(?:http://)?[\w]+:[\w]+@[\w\.-]+:\d+$'  # user:pass@ip:port
+        return bool(re.match(pattern1, proxy) or re.match(pattern2, proxy))
     
     def format_proxy(self, proxy_string):
-        if not proxy_string.startswith("http://"):
-            return f"http://{proxy_string}"
-        return proxy_string
+        """Format proxy string to http://user:pass@ip:port or http://ip:port"""
+        # Remove http:// prefix if present
+        proxy = proxy_string.replace("http://", "")
+        
+        # Check if format is user:pass@ip:port (already correct)
+        if "@" in proxy:
+            return f"http://{proxy}"
+        
+        # Check if format is ip:port:user:pass (need to convert)
+        parts = proxy.split(":")
+        if len(parts) == 4:  # ip:port:user:pass
+            ip, port, user, password = parts
+            return f"http://{user}:{password}@{ip}:{port}"
+        
+        # Simple ip:port format
+        return f"http://{proxy}"
     
     def check_proxy(self, proxy_string):
         if self.should_stop:
@@ -652,7 +667,7 @@ class CookieRefresherGUI:
         self.proxies_label.dnd_bind('<<Drop>>', lambda e: self.drop_proxies(e))
         self.proxies_label.dnd_bind('<<DragEnter>>', lambda e: self.drag_enter(self.proxies_label))
         self.proxies_label.dnd_bind('<<DragLeave>>', lambda e: self.drag_leave(self.proxies_label))
-        ToolTip(self.proxies_label, "Drop your proxies.txt file here\nFormat: ip:port or ip:port:user:pass")
+        ToolTip(self.proxies_label, "Drop your proxies.txt file here\nFormat: ip:port, ip:port:user:pass or user:pass@ip:port")
         
         self.proxies_info = tk.Label(proxies_frame, text="", 
                                      bg=self.bg_color, fg="#888888", font=("Arial", 8))
