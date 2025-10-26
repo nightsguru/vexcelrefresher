@@ -3,8 +3,9 @@
 Vexcel - universal roblox cookie refresher with IPLock Bypass, open source project without dualhook and double vendors
 
 Modules: 
- - Proxie HTTP type, smart rotation module for 
+ - Proxie HTTP type, smart rotation module / multi-formating
  - Refresh via TICKETS Authorize, smart CSFR Accept
+ - Old session break option
 
 Python3.x based, for run install Python from official site
 
