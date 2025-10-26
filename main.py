@@ -11,12 +11,15 @@ import os
 from PIL import Image, ImageTk, ImageDraw
 import pystray
 from pystray import MenuItem as item
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class CookieRefresher:
     def __init__(self):
         self.working_proxies = []
         self.results = []
+        self.log_lock = threading.Lock()
+        self.proxy_lock = threading.Lock()
         
     def load_file(self, filepath):
         with open(filepath, "r", encoding="utf-8") as f:
@@ -40,17 +43,30 @@ class CookieRefresher:
         except:
             return False
     
-    def check_all_proxies(self, proxies, log_callback):
+    def check_all_proxies(self, proxies, log_callback, max_workers=20):
         log_callback("Checking proxies...\n")
         self.working_proxies = []
         
-        for i, proxy in enumerate(proxies, 1):
-            log_callback(f"  [{i}/{len(proxies)}] Testing {proxy}... ")
-            if self.check_proxy(proxy):
-                self.working_proxies.append(proxy)
-                log_callback("✓ OK\n")
-            else:
-                log_callback("✗ Failed\n")
+        def check_single_proxy(proxy_data):
+            index, proxy = proxy_data
+            result = self.check_proxy(proxy)
+            with self.log_lock:
+                log_callback(f"  [{index}/{len(proxies)}] Testing {proxy}... ")
+                if result:
+                    log_callback("✓ OK\n")
+                else:
+                    log_callback("✗ Failed\n")
+            return proxy if result else None
+        
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(check_single_proxy, (i, proxy)): proxy 
+                      for i, proxy in enumerate(proxies, 1)}
+            
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    with self.proxy_lock:
+                        self.working_proxies.append(result)
         
         if not self.working_proxies:
             raise Exception("No working proxies found!")
@@ -436,6 +452,7 @@ class CookieRefresherGUI:
             self.status_label.config(text="◆ Ready to start! Click START REFRESHING button.")
     
     def log(self, message, tag="info"):
+        # This is already called with lock from refresh_cookie, but add safety for direct calls
         self.log_text.insert(tk.END, message, tag)
         self.log_text.see(tk.END)
         self.root.update()
@@ -464,24 +481,50 @@ class CookieRefresherGUI:
             self.status_label.config(text="Checking proxies...")
             self.refresher.check_all_proxies(proxies, self.log)
             
-            results = []
+            results = [None] * len(cookies)
             successful = 0
             failed = 0
+            completed = 0
+            results_lock = threading.Lock()
             
-            for i, cookie in enumerate(cookies, 1):
-                self.status_label.config(text=f"Refreshing cookie {i}/{len(cookies)}...")
-                self.log(f"{'='*60}\n")
-                self.log(f"Cookie #{i}/{len(cookies)}\n")
-                self.log(f"{'='*60}\n")
+            def refresh_single_cookie(cookie_data):
+                nonlocal successful, failed, completed
+                index, cookie = cookie_data
+                
+                with self.refresher.log_lock:
+                    self.log(f"{'='*60}\n")
+                    self.log(f"Cookie #{index}/{len(cookies)}\n")
+                    self.log(f"{'='*60}\n")
                 
                 new_cookie = self.refresher.refresh_cookie(cookie, self.log)
                 
-                if new_cookie:
-                    results.append(new_cookie)
-                    successful += 1
-                else:
-                    results.append(f"FAILED: {cookie[:50]}...")
-                    failed += 1
+                with results_lock:
+                    completed += 1
+                    if new_cookie:
+                        results[index - 1] = new_cookie
+                        successful += 1
+                    else:
+                        results[index - 1] = f"FAILED: {cookie[:50]}..."
+                        failed += 1
+                    
+                    self.status_label.config(text=f"Refreshing cookies... ({completed}/{len(cookies)})")
+                
+                return new_cookie
+            
+            # Process cookies with multiple threads (max 10 to avoid rate limits)
+            max_workers = min(10, len(cookies))
+            self.log(f"Starting multithreaded refresh with {max_workers} workers...\n\n")
+            
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {executor.submit(refresh_single_cookie, (i, cookie)): cookie 
+                          for i, cookie in enumerate(cookies, 1)}
+                
+                for future in as_completed(futures):
+                    try:
+                        future.result()
+                    except Exception as e:
+                        with self.refresher.log_lock:
+                            self.log(f"✗ Thread error: {str(e)}\n", "error")
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"vexcel-{timestamp}.txt"
