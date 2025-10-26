@@ -87,7 +87,7 @@ class SessionHistory:
             'output_file': output_file
         }
         self.sessions.insert(0, session)
-        if len(self.sessions) > 50:  # Keep last 50 sessions
+        if len(self.sessions) > 50:
             self.sessions = self.sessions[:50]
         self.save()
     
@@ -148,27 +148,22 @@ class CookieRefresher:
     
     def validate_proxy(self, proxy):
         """Validate proxy format"""
-        # Support both formats: ip:port:user:pass and user:pass@ip:port
-        pattern1 = r'^(?:http://)?[\w\.-]+:\d+(?::[\w]+:[\w]+)?$'  # ip:port or ip:port:user:pass
-        pattern2 = r'^(?:http://)?[\w]+:[\w]+@[\w\.-]+:\d+$'  # user:pass@ip:port
+        pattern1 = r'^(?:http://)?[\w\.-]+:\d+(?::[\w]+:[\w]+)?$'
+        pattern2 = r'^(?:http://)?[\w]+:[\w]+@[\w\.-]+:\d+$'
         return bool(re.match(pattern1, proxy) or re.match(pattern2, proxy))
     
     def format_proxy(self, proxy_string):
         """Format proxy string to http://user:pass@ip:port or http://ip:port"""
-        # Remove http:// prefix if present
         proxy = proxy_string.replace("http://", "")
         
-        # Check if format is user:pass@ip:port (already correct)
         if "@" in proxy:
             return f"http://{proxy}"
         
-        # Check if format is ip:port:user:pass (need to convert)
         parts = proxy.split(":")
-        if len(parts) == 4:  # ip:port:user:pass
+        if len(parts) == 4:
             ip, port, user, password = parts
             return f"http://{user}:{password}@{ip}:{port}"
         
-        # Simple ip:port format
         return f"http://{proxy}"
     
     def check_proxy(self, proxy_string):
@@ -419,7 +414,6 @@ class CookieRefresherGUI:
         self.start_time = None
         self.update_timer_id = None
         
-        # Colors
         self.bg_color = "#0a0a0a"
         self.fg_color = "#ffffff"
         self.accent_color = "#dc143c"
@@ -431,33 +425,27 @@ class CookieRefresherGUI:
         
         self.root.configure(bg=self.bg_color)
         
-        # Settings and History
         self.settings = Settings()
         self.history = SessionHistory()
         
-        # Files
         self.proxies_file = None
         self.cookies_file = None
         self.refresher = CookieRefresher(self.settings)
         
-        # Stats
         self.total_cookies = 0
         self.successful_count = 0
         self.failed_count = 0
         self.remaining_count = 0
         
-        # Icon and Tray
         self.icon_image = self.set_icon()
         self.tray_icon = None
         self.setup_tray_icon()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # Create GUI
         self.create_widgets()
         self.setup_hotkeys()
         
-        # Auto-detect files
         if self.settings.auto_detect_files:
             self.auto_detect_files()
     
@@ -523,18 +511,15 @@ class CookieRefresherGUI:
         self.quit_app()
     
     def quit_app(self, icon=None, item=None):
-        # Stop refreshing if running
         if self.is_running and self.refresher:
             self.refresher.stop()
         
-        # Stop tray icon
         try:
             if self.tray_icon:
                 self.tray_icon.stop()
         except:
             pass
         
-        # Destroy window
         try:
             self.root.quit()
         except:
@@ -544,7 +529,6 @@ class CookieRefresherGUI:
         except:
             pass
         
-        # Force exit
         os._exit(0)
     
     def setup_hotkeys(self):
@@ -556,7 +540,6 @@ class CookieRefresherGUI:
         self.root.bind('<F2>', lambda e: self.show_history())
     
     def create_widgets(self):
-        # Title
         title = tk.Label(self.root, text="VEXCEL COOKIE REFRESHER", 
                         font=("Arial Black", 22, "bold"), fg=self.accent_color, bg=self.bg_color)
         title.pack(pady=15)
@@ -569,7 +552,6 @@ class CookieRefresherGUI:
                            fg=self.accent_color, bg=self.bg_color, font=("Courier", 8))
         separator.pack(pady=5)
         
-        # Top buttons frame (Settings, History, Export)
         top_buttons_frame = tk.Frame(self.root, bg=self.bg_color)
         top_buttons_frame.pack(pady=10, padx=20, fill=tk.X)
         
@@ -600,7 +582,6 @@ class CookieRefresherGUI:
         export_btn.pack(side=tk.LEFT, padx=5)
         ToolTip(export_btn, "Export results in different formats")
         
-        # Stats panel
         stats_frame = tk.LabelFrame(self.root, text="◆ LIVE STATISTICS", 
                                    font=("Arial", 10, "bold"),
                                    fg=self.accent_color, bg=self.bg_color,
@@ -610,7 +591,6 @@ class CookieRefresherGUI:
         stats_container = tk.Frame(stats_frame, bg=self.bg_color)
         stats_container.pack(fill=tk.X, padx=10, pady=10)
         
-        # Success counter
         success_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
         success_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
         tk.Label(success_frame, text="✓ SUCCESSFUL", font=("Arial", 9, "bold"), 
@@ -619,7 +599,6 @@ class CookieRefresherGUI:
                                       bg=self.dark_gray, fg=self.success_color)
         self.success_label.pack(pady=5)
         
-        # Failed counter
         failed_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
         failed_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
         tk.Label(failed_frame, text="✗ FAILED", font=("Arial", 9, "bold"), 
@@ -628,7 +607,6 @@ class CookieRefresherGUI:
                                      bg=self.dark_gray, fg=self.accent_color)
         self.failed_label.pack(pady=5)
         
-        # Remaining counter
         remaining_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
         remaining_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
         tk.Label(remaining_frame, text="⏳ REMAINING", font=("Arial", 9, "bold"), 
@@ -637,7 +615,6 @@ class CookieRefresherGUI:
                                        bg=self.dark_gray, fg=self.warning_color)
         self.remaining_label.pack(pady=5)
         
-        # Speed & Time
         speed_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
         speed_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
         tk.Label(speed_frame, text="⚡ SPEED", font=("Arial", 9, "bold"), 
@@ -649,7 +626,6 @@ class CookieRefresherGUI:
                                    bg=self.dark_gray, fg="#aaaaaa")
         self.time_label.pack(pady=2)
         
-        # Drop zones
         drop_frame = tk.Frame(self.root, bg=self.bg_color)
         drop_frame.pack(pady=10, padx=20, fill=tk.X)
         
@@ -693,7 +669,6 @@ class CookieRefresherGUI:
                                      bg=self.bg_color, fg="#888888", font=("Arial", 8))
         self.cookies_info.pack()
         
-        # Control buttons
         button_frame = tk.Frame(self.root, bg=self.bg_color)
         button_frame.pack(pady=15)
         
@@ -718,7 +693,6 @@ class CookieRefresherGUI:
         self.stop_button.pack(side=tk.LEFT, padx=10)
         ToolTip(self.stop_button, "Stop refreshing process (Escape)")
         
-        # Progress bar with percentage
         progress_frame = tk.Frame(self.root, bg=self.bg_color)
         progress_frame.pack(pady=5, padx=20, fill=tk.X)
         
@@ -732,7 +706,6 @@ class CookieRefresherGUI:
                        darkcolor=self.accent_color,
                        thickness=20)
         
-        # Configure scrollbar style
         style.configure("Custom.Vertical.TScrollbar",
                        background=self.light_gray,
                        troughcolor=self.dark_gray,
@@ -756,7 +729,6 @@ class CookieRefresherGUI:
                                  bg=self.bg_color, fg="#888888", font=("Arial", 9))
         self.eta_label.pack()
         
-        # Log frame
         log_frame = tk.LabelFrame(self.root, text="◆ SYSTEM LOG", 
                                  font=("Arial", 10, "bold"),
                                  fg=self.accent_color, bg=self.bg_color,
@@ -787,7 +759,6 @@ class CookieRefresherGUI:
         self.log_text.tag_config("info", foreground="#ffffff")
         self.log_text.tag_config("warning", foreground=self.warning_color)
         
-        # Status bar
         self.status_label = tk.Label(self.root, text="◆ Ready. Drop files to begin or they will be auto-detected.", 
                                     relief=tk.FLAT, anchor=tk.W,
                                     bg=self.light_gray, fg=self.fg_color,
@@ -887,14 +858,12 @@ class CookieRefresherGUI:
             self.remaining_count = remaining
             self.remaining_label.config(text=str(remaining))
         
-        # Update progress
         if self.total_cookies > 0:
             completed = self.successful_count + self.failed_count
             percentage = int((completed / self.total_cookies) * 100)
             self.progress['value'] = percentage
             self.progress_label.config(text=f"{percentage}%")
             
-            # Calculate ETA
             if self.start_time and completed > 0:
                 elapsed = time.time() - self.start_time
                 avg_time = elapsed / completed
@@ -903,8 +872,7 @@ class CookieRefresherGUI:
                 eta_str = str(timedelta(seconds=int(remaining_time)))
                 self.eta_label.config(text=f"ETA: {eta_str}")
                 
-                # Calculate speed
-                speed = (completed / elapsed) * 60  # per minute
+                speed = (completed / elapsed) * 60
                 self.speed_label.config(text=f"{speed:.1f}/min")
         
         self.root.update()
@@ -992,7 +960,6 @@ class CookieRefresherGUI:
             self.log(f"Loaded {len(proxies)} proxies\n")
             self.log(f"Loaded {len(cookies)} cookies\n\n")
             
-            # Check proxies
             self.status_label.config(text="Checking proxies...")
             
             def proxy_progress(checked, total):
@@ -1005,7 +972,6 @@ class CookieRefresherGUI:
                 self.handle_stop()
                 return
             
-            # Refresh cookies
             results = [None] * len(cookies)
             successful = 0
             failed = 0
@@ -1041,7 +1007,6 @@ class CookieRefresherGUI:
                 
                 return new_cookie
             
-            # Process cookies with multiple threads
             max_workers = min(self.settings.max_workers, len(cookies))
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -1063,7 +1028,6 @@ class CookieRefresherGUI:
                 self.handle_stop()
                 return
             
-            # Save results
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_file = f"vexcel-{timestamp}.txt"
             
@@ -1075,11 +1039,9 @@ class CookieRefresherGUI:
                         else:
                             f.write(f"_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_{result}\n")
             
-            # Calculate duration
             duration = int(time.time() - self.start_time)
             duration_str = str(timedelta(seconds=duration))
             
-            # Add to history
             self.history.add_session(len(cookies), successful, failed, duration_str, output_file)
             
             self.log(f"\n{'='*70}\n", "info")
@@ -1095,7 +1057,6 @@ class CookieRefresherGUI:
             self.progress_label.config(text="100%")
             self.status_label.config(text=f"◆ Complete! Results saved to {output_file}", fg=self.success_color)
             
-            # Sound notification
             self.play_sound("complete")
             self.notify_tray(f"Refresh complete! Success: {successful}/{len(cookies)}")
             
@@ -1134,100 +1095,179 @@ class CookieRefresherGUI:
     def open_settings(self):
         """Open settings window"""
         settings_window = tk.Toplevel(self.root)
-        settings_window.title("Settings")
-        settings_window.geometry("500x550")
+        settings_window.title("Vexcel Settings")
+        settings_window.geometry("600x700")
         settings_window.configure(bg=self.bg_color)
         settings_window.resizable(False, False)
         settings_window.transient(self.root)
         settings_window.grab_set()
         
-        # Title
-        tk.Label(settings_window, text="⚙ SETTINGS", 
-                font=("Arial Black", 16, "bold"), 
-                fg=self.accent_color, bg=self.bg_color).pack(pady=20)
+        try:
+            if os.path.exists("ico.ico"):
+                settings_window.iconbitmap("ico.ico")
+        except:
+            pass
         
-        # Settings frame
-        frame = tk.Frame(settings_window, bg=self.bg_color)
-        frame.pack(pady=10, padx=30, fill=tk.BOTH, expand=True)
+        title_frame = tk.Frame(settings_window, bg=self.dark_gray, relief=tk.RAISED, bd=2)
+        title_frame.pack(fill=tk.X, pady=(0, 20))
         
-        # Cookie refresh threads
-        tk.Label(frame, text="Cookie Refresh Threads (1-20):", 
+        tk.Label(title_frame, text="⚙", 
+                font=("Arial", 28), 
+                fg=self.accent_color, bg=self.dark_gray).pack(pady=(15, 5))
+        
+        tk.Label(title_frame, text="SETTINGS", 
+                font=("Arial Black", 18, "bold"), 
+                fg=self.accent_color, bg=self.dark_gray).pack()
+        
+        tk.Label(title_frame, text="Configure performance and behavior", 
+                font=("Arial", 9, "italic"), 
+                fg="#888888", bg=self.dark_gray).pack(pady=(0, 15))
+        
+        main_container = tk.Frame(settings_window, bg=self.bg_color)
+        main_container.pack(fill=tk.BOTH, expand=True, padx=20)
+        
+        perf_section = tk.LabelFrame(main_container, text="  ⚡ PERFORMANCE  ", 
+                                    font=("Arial", 11, "bold"),
+                                    fg=self.accent_color, bg=self.bg_color,
+                                    relief=tk.GROOVE, bd=2)
+        perf_section.pack(fill=tk.X, pady=(0, 15))
+        
+        perf_frame = tk.Frame(perf_section, bg=self.bg_color)
+        perf_frame.pack(fill=tk.X, padx=15, pady=10)
+        
+        row_frame1 = tk.Frame(perf_frame, bg=self.dark_gray, relief=tk.FLAT)
+        row_frame1.pack(fill=tk.X, pady=5)
+        
+        tk.Label(row_frame1, text="🍪 Cookie Refresh Threads:", 
                 font=("Arial", 10, "bold"), 
-                fg=self.fg_color, bg=self.bg_color).grid(row=0, column=0, sticky=tk.W, pady=10)
+                fg=self.fg_color, bg=self.dark_gray, anchor=tk.W).pack(side=tk.LEFT, padx=10, pady=8, fill=tk.X, expand=True)
         
         workers_var = tk.IntVar(value=self.settings.max_workers)
-        workers_spin = tk.Spinbox(frame, from_=1, to=20, textvariable=workers_var,
-                                 font=("Arial", 10), width=10)
-        workers_spin.grid(row=0, column=1, sticky=tk.W, pady=10, padx=10)
-        ToolTip(workers_spin, "Number of cookies to refresh simultaneously\nHigher = faster but may trigger rate limits")
+        workers_spin = tk.Spinbox(row_frame1, from_=1, to=20, textvariable=workers_var,
+                                 font=("Arial", 11, "bold"), width=8, bg=self.light_gray,
+                                 fg=self.fg_color, buttonbackground=self.accent_color,
+                                 relief=tk.FLAT, bd=0)
+        workers_spin.pack(side=tk.RIGHT, padx=10, pady=5)
+        ToolTip(workers_spin, "Number of cookies to refresh simultaneously\n1-20: Higher = faster but may trigger rate limits\nRecommended: 5-10")
         
-        # Proxy check threads
-        tk.Label(frame, text="Proxy Check Threads (5-50):", 
+        row_frame2 = tk.Frame(perf_frame, bg=self.dark_gray, relief=tk.FLAT)
+        row_frame2.pack(fill=tk.X, pady=5)
+        
+        tk.Label(row_frame2, text="🔍 Proxy Check Threads:", 
                 font=("Arial", 10, "bold"), 
-                fg=self.fg_color, bg=self.bg_color).grid(row=1, column=0, sticky=tk.W, pady=10)
+                fg=self.fg_color, bg=self.dark_gray, anchor=tk.W).pack(side=tk.LEFT, padx=10, pady=8, fill=tk.X, expand=True)
         
         proxy_workers_var = tk.IntVar(value=self.settings.proxy_workers)
-        proxy_workers_spin = tk.Spinbox(frame, from_=5, to=50, textvariable=proxy_workers_var,
-                                       font=("Arial", 10), width=10)
-        proxy_workers_spin.grid(row=1, column=1, sticky=tk.W, pady=10, padx=10)
-        ToolTip(proxy_workers_spin, "Number of proxies to check simultaneously")
+        proxy_workers_spin = tk.Spinbox(row_frame2, from_=5, to=50, textvariable=proxy_workers_var,
+                                       font=("Arial", 11, "bold"), width=8, bg=self.light_gray,
+                                       fg=self.fg_color, buttonbackground=self.accent_color,
+                                       relief=tk.FLAT, bd=0)
+        proxy_workers_spin.pack(side=tk.RIGHT, padx=10, pady=5)
+        ToolTip(proxy_workers_spin, "Number of proxies to check simultaneously\n5-50: Higher = faster proxy validation\nRecommended: 20-30")
         
-        # Max retries
-        tk.Label(frame, text="Max Retries per Cookie (1-10):", 
+        row_frame3 = tk.Frame(perf_frame, bg=self.dark_gray, relief=tk.FLAT)
+        row_frame3.pack(fill=tk.X, pady=5)
+        
+        tk.Label(row_frame3, text="🔄 Max Retries per Cookie:", 
                 font=("Arial", 10, "bold"), 
-                fg=self.fg_color, bg=self.bg_color).grid(row=2, column=0, sticky=tk.W, pady=10)
+                fg=self.fg_color, bg=self.dark_gray, anchor=tk.W).pack(side=tk.LEFT, padx=10, pady=8, fill=tk.X, expand=True)
         
         retries_var = tk.IntVar(value=self.settings.max_retries)
-        retries_spin = tk.Spinbox(frame, from_=1, to=10, textvariable=retries_var,
-                                 font=("Arial", 10), width=10)
-        retries_spin.grid(row=2, column=1, sticky=tk.W, pady=10, padx=10)
-        ToolTip(retries_spin, "How many times to retry a failed cookie")
+        retries_spin = tk.Spinbox(row_frame3, from_=1, to=10, textvariable=retries_var,
+                                 font=("Arial", 11, "bold"), width=8, bg=self.light_gray,
+                                 fg=self.fg_color, buttonbackground=self.accent_color,
+                                 relief=tk.FLAT, bd=0)
+        retries_spin.pack(side=tk.RIGHT, padx=10, pady=5)
+        ToolTip(retries_spin, "How many times to retry a failed cookie\n1-10: Higher = more attempts but slower\nRecommended: 3-5")
         
-        # Connection timeout
-        tk.Label(frame, text="Connection Timeout (seconds):", 
+        timeout_section = tk.LabelFrame(main_container, text="  ⏱ TIMEOUTS  ", 
+                                       font=("Arial", 11, "bold"),
+                                       fg=self.accent_color, bg=self.bg_color,
+                                       relief=tk.GROOVE, bd=2)
+        timeout_section.pack(fill=tk.X, pady=(0, 15))
+        
+        timeout_frame = tk.Frame(timeout_section, bg=self.bg_color)
+        timeout_frame.pack(fill=tk.X, padx=15, pady=10)
+        
+        row_frame4 = tk.Frame(timeout_frame, bg=self.dark_gray, relief=tk.FLAT)
+        row_frame4.pack(fill=tk.X, pady=5)
+        
+        tk.Label(row_frame4, text="🔌 Connection Timeout:", 
                 font=("Arial", 10, "bold"), 
-                fg=self.fg_color, bg=self.bg_color).grid(row=3, column=0, sticky=tk.W, pady=10)
+                fg=self.fg_color, bg=self.dark_gray, anchor=tk.W).pack(side=tk.LEFT, padx=10, pady=8, fill=tk.X, expand=True)
         
         conn_timeout_var = tk.DoubleVar(value=self.settings.connection_timeout)
-        conn_timeout_spin = tk.Spinbox(frame, from_=5.0, to=30.0, increment=1.0,
+        conn_timeout_spin = tk.Spinbox(row_frame4, from_=5.0, to=30.0, increment=1.0,
                                       textvariable=conn_timeout_var,
-                                      font=("Arial", 10), width=10)
-        conn_timeout_spin.grid(row=3, column=1, sticky=tk.W, pady=10, padx=10)
+                                      font=("Arial", 11, "bold"), width=8, bg=self.light_gray,
+                                      fg=self.fg_color, buttonbackground=self.accent_color,
+                                      relief=tk.FLAT, bd=0)
+        conn_timeout_spin.pack(side=tk.RIGHT, padx=10, pady=5)
         
-        # Request timeout
-        tk.Label(frame, text="Request Timeout (seconds):", 
+        tk.Label(row_frame4, text="sec", 
+                font=("Arial", 9), 
+                fg="#888888", bg=self.dark_gray).pack(side=tk.RIGHT, padx=(0, 5))
+        ToolTip(conn_timeout_spin, "Time to wait for proxy connection\n5-30 seconds\nRecommended: 10")
+        
+        row_frame5 = tk.Frame(timeout_frame, bg=self.dark_gray, relief=tk.FLAT)
+        row_frame5.pack(fill=tk.X, pady=5)
+        
+        tk.Label(row_frame5, text="📡 Request Timeout:", 
                 font=("Arial", 10, "bold"), 
-                fg=self.fg_color, bg=self.bg_color).grid(row=4, column=0, sticky=tk.W, pady=10)
+                fg=self.fg_color, bg=self.dark_gray, anchor=tk.W).pack(side=tk.LEFT, padx=10, pady=8, fill=tk.X, expand=True)
         
         req_timeout_var = tk.DoubleVar(value=self.settings.request_timeout)
-        req_timeout_spin = tk.Spinbox(frame, from_=10.0, to=60.0, increment=5.0,
+        req_timeout_spin = tk.Spinbox(row_frame5, from_=10.0, to=60.0, increment=5.0,
                                      textvariable=req_timeout_var,
-                                     font=("Arial", 10), width=10)
-        req_timeout_spin.grid(row=4, column=1, sticky=tk.W, pady=10, padx=10)
+                                     font=("Arial", 11, "bold"), width=8, bg=self.light_gray,
+                                     fg=self.fg_color, buttonbackground=self.accent_color,
+                                     relief=tk.FLAT, bd=0)
+        req_timeout_spin.pack(side=tk.RIGHT, padx=10, pady=5)
         
-        # Sound enabled
+        tk.Label(row_frame5, text="sec", 
+                font=("Arial", 9), 
+                fg="#888888", bg=self.dark_gray).pack(side=tk.RIGHT, padx=(0, 5))
+        ToolTip(req_timeout_spin, "Time to wait for API response\n10-60 seconds\nRecommended: 30")
+        
+        options_section = tk.LabelFrame(main_container, text="  🎛 OPTIONS  ", 
+                                       font=("Arial", 11, "bold"),
+                                       fg=self.accent_color, bg=self.bg_color,
+                                       relief=tk.GROOVE, bd=2)
+        options_section.pack(fill=tk.X, pady=(0, 15))
+        
+        options_frame = tk.Frame(options_section, bg=self.bg_color)
+        options_frame.pack(fill=tk.X, padx=15, pady=10)
+        
+        sound_frame = tk.Frame(options_frame, bg=self.dark_gray, relief=tk.FLAT)
+        sound_frame.pack(fill=tk.X, pady=5)
+        
         sound_var = tk.BooleanVar(value=self.settings.sound_enabled)
-        sound_check = tk.Checkbutton(frame, text="Enable Sound Notifications", 
+        sound_check = tk.Checkbutton(sound_frame, text="🔊 Enable Sound Notifications", 
                                     variable=sound_var,
                                     font=("Arial", 10, "bold"), 
-                                    fg=self.fg_color, bg=self.bg_color,
-                                    selectcolor=self.dark_gray,
-                                    activebackground=self.bg_color,
-                                    activeforeground=self.accent_color)
-        sound_check.grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=10)
+                                    fg=self.fg_color, bg=self.dark_gray,
+                                    selectcolor=self.light_gray,
+                                    activebackground=self.dark_gray,
+                                    activeforeground=self.accent_color,
+                                    relief=tk.FLAT, bd=0, padx=10, pady=10)
+        sound_check.pack(fill=tk.X)
+        ToolTip(sound_check, "Play sound when refresh completes or errors occur")
         
-        # Auto-detect files
+        autodetect_frame = tk.Frame(options_frame, bg=self.dark_gray, relief=tk.FLAT)
+        autodetect_frame.pack(fill=tk.X, pady=5)
+        
         auto_detect_var = tk.BooleanVar(value=self.settings.auto_detect_files)
-        auto_detect_check = tk.Checkbutton(frame, text="Auto-detect files on startup", 
+        auto_detect_check = tk.Checkbutton(autodetect_frame, text="📁 Auto-detect files on startup", 
                                           variable=auto_detect_var,
                                           font=("Arial", 10, "bold"), 
-                                          fg=self.fg_color, bg=self.bg_color,
-                                          selectcolor=self.dark_gray,
-                                          activebackground=self.bg_color,
-                                          activeforeground=self.accent_color)
-        auto_detect_check.grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=10)
+                                          fg=self.fg_color, bg=self.dark_gray,
+                                          selectcolor=self.light_gray,
+                                          activebackground=self.dark_gray,
+                                          activeforeground=self.accent_color,
+                                          relief=tk.FLAT, bd=0, padx=10, pady=10)
+        auto_detect_check.pack(fill=tk.X)
+        ToolTip(auto_detect_check, "Automatically load proxies.txt and cookies.txt from current directory")
         
-        # Buttons
         btn_frame = tk.Frame(settings_window, bg=self.bg_color)
         btn_frame.pack(pady=20)
         
@@ -1241,36 +1281,71 @@ class CookieRefresherGUI:
             self.settings.auto_detect_files = auto_detect_var.get()
             self.settings.save()
             
-            # Update refresher settings
             self.refresher.settings = self.settings
             
-            messagebox.showinfo("Saved", "Settings saved successfully!", parent=settings_window)
+            messagebox.showinfo("Saved", "✓ Settings saved successfully!", parent=settings_window)
             settings_window.destroy()
         
-        tk.Button(btn_frame, text="💾 Save", command=save_settings,
-                 font=("Arial", 11, "bold"), 
+        save_btn = tk.Button(btn_frame, text="💾 Save", command=save_settings,
+                 font=("Arial Black", 12, "bold"), 
                  bg=self.accent_color, fg="#ffffff",
                  activebackground=self.accent_hover,
-                 width=12, height=2, cursor="hand2").pack(side=tk.LEFT, padx=10)
+                 activeforeground="#ffffff",
+                 width=15, height=2, cursor="hand2",
+                 relief=tk.RAISED, bd=3)
+        save_btn.pack(side=tk.LEFT, padx=10)
         
-        tk.Button(btn_frame, text="✖ Cancel", command=settings_window.destroy,
-                 font=("Arial", 11, "bold"), 
+        cancel_btn = tk.Button(btn_frame, text="✖ Cancel", command=settings_window.destroy,
+                 font=("Arial Black", 12, "bold"), 
                  bg=self.light_gray, fg="#ffffff",
                  activebackground=self.dark_gray,
-                 width=12, height=2, cursor="hand2").pack(side=tk.LEFT, padx=10)
+                 activeforeground="#ffffff",
+                 width=15, height=2, cursor="hand2",
+                 relief=tk.RAISED, bd=3)
+        cancel_btn.pack(side=tk.LEFT, padx=10)
+        
+        def on_enter_save(e):
+            save_btn.config(bg=self.accent_hover)
+        def on_leave_save(e):
+            save_btn.config(bg=self.accent_color)
+        def on_enter_cancel(e):
+            cancel_btn.config(bg=self.dark_gray)
+        def on_leave_cancel(e):
+            cancel_btn.config(bg=self.light_gray)
+            
+        save_btn.bind("<Enter>", on_enter_save)
+        save_btn.bind("<Leave>", on_leave_save)
+        cancel_btn.bind("<Enter>", on_enter_cancel)
+        cancel_btn.bind("<Leave>", on_leave_cancel)
     
     def show_history(self):
         """Show session history window"""
         history_window = tk.Toplevel(self.root)
-        history_window.title("Session History")
+        history_window.title("Vexcel Session History")
         history_window.geometry("800x600")
         history_window.configure(bg=self.bg_color)
         history_window.transient(self.root)
         
-        # Title
-        tk.Label(history_window, text="📊 SESSION HISTORY", 
+        try:
+            if os.path.exists("ico.ico"):
+                history_window.iconbitmap("ico.ico")
+        except:
+            pass
+        
+        title_frame = tk.Frame(history_window, bg=self.dark_gray, relief=tk.RAISED, bd=2)
+        title_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        tk.Label(title_frame, text="📊", 
+                font=("Arial", 28), 
+                fg=self.accent_color, bg=self.dark_gray).pack(pady=(15, 5))
+        
+        tk.Label(title_frame, text="SESSION HISTORY", 
                 font=("Arial Black", 16, "bold"), 
-                fg=self.accent_color, bg=self.bg_color).pack(pady=20)
+                fg=self.accent_color, bg=self.dark_gray).pack()
+        
+        tk.Label(title_frame, text="View your previous refresh sessions", 
+                font=("Arial", 9, "italic"), 
+                fg="#888888", bg=self.dark_gray).pack(pady=(0, 15))
         
         if not self.history.sessions:
             tk.Label(history_window, text="No session history yet", 
@@ -1278,7 +1353,6 @@ class CookieRefresherGUI:
                     fg="#888888", bg=self.bg_color).pack(pady=50)
             return
         
-        # Create scrollable frame
         canvas = tk.Canvas(history_window, bg=self.bg_color, highlightthickness=0)
         scrollbar = ttk.Scrollbar(history_window, orient="vertical", command=canvas.yview,
                                  style="Custom.Vertical.TScrollbar")
@@ -1292,13 +1366,11 @@ class CookieRefresherGUI:
         canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Display sessions
         for i, session in enumerate(self.history.sessions):
             session_frame = tk.Frame(scrollable_frame, bg=self.dark_gray, 
                                     relief=tk.RAISED, bd=2)
             session_frame.pack(pady=5, padx=20, fill=tk.X)
             
-            # Header
             header = tk.Frame(session_frame, bg=self.light_gray)
             header.pack(fill=tk.X, padx=2, pady=2)
             
@@ -1310,7 +1382,6 @@ class CookieRefresherGUI:
                     font=("Arial", 9), 
                     fg="#aaaaaa", bg=self.light_gray).pack(side=tk.RIGHT, padx=10, pady=5)
             
-            # Stats
             stats = tk.Frame(session_frame, bg=self.dark_gray)
             stats.pack(fill=tk.X, padx=10, pady=5)
             
@@ -1326,14 +1397,12 @@ class CookieRefresherGUI:
             tk.Label(stats, text=f"Rate: {session['success_rate']}%", 
                     font=("Arial", 9, "bold"), fg=self.warning_color, bg=self.dark_gray).pack(side=tk.LEFT, padx=10)
             
-            # Output file
             tk.Label(session_frame, text=f"📄 {session['output_file']}", 
                     font=("Arial", 8), fg="#888888", bg=self.dark_gray).pack(padx=10, pady=5, anchor=tk.W)
         
         canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
         scrollbar.pack(side="right", fill="y")
         
-        # Close button
         tk.Button(history_window, text="Close", command=history_window.destroy,
                  font=("Arial", 11, "bold"), 
                  bg=self.accent_color, fg="#ffffff",
@@ -1361,7 +1430,6 @@ class CookieRefresherGUI:
                 font=("Arial", 10), 
                 fg=self.fg_color, bg=self.bg_color).pack(pady=10)
         
-        # Format selection
         format_var = tk.StringVar(value="txt")
         
         formats = [
@@ -1379,7 +1447,6 @@ class CookieRefresherGUI:
                           activebackground=self.bg_color).pack(anchor=tk.W, padx=50, pady=5)
         
         def do_export():
-            # Implementation would go here
             messagebox.showinfo("Export", f"Export to {format_var.get()} format", parent=export_window)
             export_window.destroy()
         
