@@ -1,29 +1,155 @@
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, messagebox, filedialog
 from tkinterdnd2 import DND_FILES, TkinterDnD
 import threading
 import httpx
 import random
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
+import json
+import sys
 from PIL import Image, ImageTk, ImageDraw
 import pystray
 from pystray import MenuItem as item
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
-class CookieRefresher:
+class Settings:
+    """Settings manager with save/load functionality"""
     def __init__(self):
+        self.config_file = "vexcel_settings.json"
+        self.max_workers = 10
+        self.proxy_workers = 20
+        self.max_retries = 5
+        self.connection_timeout = 10.0
+        self.request_timeout = 30.0
+        self.sound_enabled = True
+        self.auto_detect_files = True
+        self.load()
+    
+    def load(self):
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    data = json.load(f)
+                    self.max_workers = data.get('max_workers', 10)
+                    self.proxy_workers = data.get('proxy_workers', 20)
+                    self.max_retries = data.get('max_retries', 5)
+                    self.connection_timeout = data.get('connection_timeout', 10.0)
+                    self.request_timeout = data.get('request_timeout', 30.0)
+                    self.sound_enabled = data.get('sound_enabled', True)
+                    self.auto_detect_files = data.get('auto_detect_files', True)
+        except:
+            pass
+    
+    def save(self):
+        try:
+            data = {
+                'max_workers': self.max_workers,
+                'proxy_workers': self.proxy_workers,
+                'max_retries': self.max_retries,
+                'connection_timeout': self.connection_timeout,
+                'request_timeout': self.request_timeout,
+                'sound_enabled': self.sound_enabled,
+                'auto_detect_files': self.auto_detect_files
+            }
+            with open(self.config_file, 'w') as f:
+                json.dump(data, f, indent=4)
+        except:
+            pass
+
+
+class SessionHistory:
+    """History manager for tracking sessions"""
+    def __init__(self):
+        self.history_file = "vexcel_history.json"
+        self.sessions = []
+        self.load()
+    
+    def load(self):
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r') as f:
+                    self.sessions = json.load(f)
+        except:
+            self.sessions = []
+    
+    def add_session(self, total, successful, failed, duration, output_file):
+        session = {
+            'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            'total': total,
+            'successful': successful,
+            'failed': failed,
+            'duration': duration,
+            'success_rate': round((successful / total * 100) if total > 0 else 0, 1),
+            'output_file': output_file
+        }
+        self.sessions.insert(0, session)
+        if len(self.sessions) > 50:  # Keep last 50 sessions
+            self.sessions = self.sessions[:50]
+        self.save()
+    
+    def save(self):
+        try:
+            with open(self.history_file, 'w') as f:
+                json.dump(self.sessions, f, indent=4)
+        except:
+            pass
+
+
+class ToolTip:
+    """Create tooltip for widgets"""
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tooltip = None
+        self.widget.bind("<Enter>", self.show_tooltip)
+        self.widget.bind("<Leave>", self.hide_tooltip)
+    
+    def show_tooltip(self, event=None):
+        x = self.widget.winfo_rootx() + 25
+        y = self.widget.winfo_rooty() + 25
+        self.tooltip = tk.Toplevel(self.widget)
+        self.tooltip.wm_overrideredirect(True)
+        self.tooltip.wm_geometry(f"+{x}+{y}")
+        label = tk.Label(self.tooltip, text=self.text, 
+                        background="#1a1a1a", foreground="#ffffff",
+                        relief=tk.SOLID, borderwidth=1, 
+                        font=("Arial", 9), padx=8, pady=4)
+        label.pack()
+    
+    def hide_tooltip(self, event=None):
+        if self.tooltip:
+            self.tooltip.destroy()
+            self.tooltip = None
+
+
+class CookieRefresher:
+    def __init__(self, settings):
+        self.settings = settings
         self.working_proxies = []
         self.results = []
         self.log_lock = threading.Lock()
         self.proxy_lock = threading.Lock()
+        self.should_stop = False
         
+    def stop(self):
+        self.should_stop = True
+    
     def load_file(self, filepath):
         with open(filepath, "r", encoding="utf-8") as f:
             return [line.strip() for line in f if line.strip()]
+    
+    def validate_cookie(self, cookie):
+        """Validate cookie format"""
+        return len(cookie) > 50 and not cookie.startswith('#')
+    
+    def validate_proxy(self, proxy):
+        """Validate proxy format"""
+        pattern = r'^(?:http://)?[\w\.-]+:\d+(?::[\w]+:[\w]+)?$'
+        return bool(re.match(pattern, proxy))
     
     def format_proxy(self, proxy_string):
         if not proxy_string.startswith("http://"):
@@ -31,9 +157,11 @@ class CookieRefresher:
         return proxy_string
     
     def check_proxy(self, proxy_string):
+        if self.should_stop:
+            return False
         try:
             proxy_formatted = self.format_proxy(proxy_string)
-            timeout = httpx.Timeout(10.0, connect=5.0)
+            timeout = httpx.Timeout(self.settings.connection_timeout, connect=5.0)
             try:
                 response = httpx.get("https://www.roblox.com", proxy=proxy_formatted, timeout=timeout)
             except TypeError:
@@ -43,14 +171,21 @@ class CookieRefresher:
         except:
             return False
     
-    def check_all_proxies(self, proxies, log_callback, max_workers=20):
+    def check_all_proxies(self, proxies, log_callback, progress_callback=None):
         log_callback("Checking proxies...\n")
         self.working_proxies = []
+        checked = 0
         
         def check_single_proxy(proxy_data):
+            nonlocal checked
+            if self.should_stop:
+                return None
             index, proxy = proxy_data
             result = self.check_proxy(proxy)
             with self.log_lock:
+                checked += 1
+                if progress_callback:
+                    progress_callback(checked, len(proxies))
                 log_callback(f"  [{index}/{len(proxies)}] Testing {proxy}... ")
                 if result:
                     log_callback("✓ OK\n")
@@ -58,20 +193,24 @@ class CookieRefresher:
                     log_callback("✗ Failed\n")
             return proxy if result else None
         
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        with ThreadPoolExecutor(max_workers=self.settings.proxy_workers) as executor:
             futures = {executor.submit(check_single_proxy, (i, proxy)): proxy 
                       for i, proxy in enumerate(proxies, 1)}
             
             for future in as_completed(futures):
+                if self.should_stop:
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
                 result = future.result()
                 if result:
                     with self.proxy_lock:
                         self.working_proxies.append(result)
         
-        if not self.working_proxies:
+        if not self.working_proxies and not self.should_stop:
             raise Exception("No working proxies found!")
         
-        log_callback(f"\n✓ Found {len(self.working_proxies)} working proxies out of {len(proxies)}\n\n")
+        if not self.should_stop:
+            log_callback(f"\n✓ Found {len(self.working_proxies)} working proxies out of {len(proxies)}\n\n")
     
     def get_random_proxy(self):
         if not self.working_proxies:
@@ -80,8 +219,10 @@ class CookieRefresher:
         return {"http://": proxy_string, "https://": proxy_string}
     
     def generate_csrf_token(self, auth_cookie, proxy_dict):
+        if self.should_stop:
+            raise Exception("Stopped by user")
         proxy_str = list(proxy_dict.values())[0] if isinstance(proxy_dict, dict) else proxy_dict
-        timeout = httpx.Timeout(30.0, connect=10.0)
+        timeout = httpx.Timeout(self.settings.request_timeout, connect=self.settings.connection_timeout)
         try:
             csrf_req = httpx.get("https://www.roblox.com/home",
                                  cookies={".ROBLOSECURITY": auth_cookie},
@@ -108,10 +249,14 @@ class CookieRefresher:
         
         return token_parts[0]
     
-    def refresh_cookie(self, auth_cookie, log_callback, max_retries=5):
+    def refresh_cookie(self, auth_cookie, log_callback):
+        if self.should_stop:
+            return None
         used_proxies = []
         
-        for attempt in range(max_retries):
+        for attempt in range(self.settings.max_retries):
+            if self.should_stop:
+                return None
             try:
                 available_proxies = [p for p in self.working_proxies if p not in used_proxies]
                 if not available_proxies:
@@ -122,7 +267,7 @@ class CookieRefresher:
                 used_proxies.append(proxy_str)
                 proxy = {"http://": proxy_str, "https://": proxy_str}
                 
-                log_callback(f"[Attempt {attempt + 1}/{max_retries}] Using proxy: {proxy_str}\n")
+                log_callback(f"[Attempt {attempt + 1}/{self.settings.max_retries}] Using proxy: {proxy_str}\n")
                 
                 if attempt > 0:
                     delay = random.uniform(2, 5)
@@ -144,7 +289,7 @@ class CookieRefresher:
                 cookies = {".ROBLOSECURITY": auth_cookie}
                 
                 proxy_str = list(proxy.values())[0]
-                timeout = httpx.Timeout(30.0, connect=10.0)
+                timeout = httpx.Timeout(self.settings.request_timeout, connect=self.settings.connection_timeout)
                 try:
                     req = httpx.post("https://auth.roblox.com/v1/authentication-ticket",
                                     headers=headers, cookies=cookies, json={}, proxy=proxy_str,
@@ -215,14 +360,16 @@ class CookieRefresher:
                 error_type = type(e).__name__
                 log_callback(f"✗ Proxy error ({error_type}): {str(e)[:100]}\n")
                 
-                if attempt < max_retries - 1:
+                if attempt < self.settings.max_retries - 1:
                     log_callback(f"→ Switching to another proxy...\n")
                     continue
                 else:
-                    log_callback(f"✗ Failed after {max_retries} attempts\n\n")
+                    log_callback(f"✗ Failed after {self.settings.max_retries} attempts\n\n")
                     return None
             
             except Exception as e:
+                if self.should_stop:
+                    return None
                 log_callback(f"✗ ERROR: {str(e)[:200]}\n")
                 
                 if "401" in str(e) or "Unauthorized" in str(e):
@@ -230,15 +377,15 @@ class CookieRefresher:
                     return None
                 
                 if "429" in str(e) or "Too many requests" in str(e):
-                    if attempt < max_retries - 1:
+                    if attempt < self.settings.max_retries - 1:
                         log_callback(f"→ Rate limited, switching proxy...\n")
                         continue
                 
-                if attempt < max_retries - 1:
+                if attempt < self.settings.max_retries - 1:
                     log_callback(f"→ Retrying with another proxy...\n")
                     continue
                 else:
-                    log_callback(f"✗ Failed after {max_retries} attempts\n\n")
+                    log_callback(f"✗ Failed after {self.settings.max_retries} attempts\n\n")
                     return None
         
         return None
@@ -247,32 +394,57 @@ class CookieRefresher:
 class CookieRefresherGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("Vexcel Cookie Refresher")
-        self.root.geometry("900x700")
+        self.root.title("Vexcel Cookie Refresher - Enhanced Edition")
+        self.root.geometry("1000x800")
         
-        self.root.resizable(False, False)
+        self.root.resizable(True, True)
+        self.root.minsize(900, 700)
+        self.is_running = False
+        self.executor = None
+        self.start_time = None
+        self.update_timer_id = None
         
+        # Colors
         self.bg_color = "#0a0a0a"
         self.fg_color = "#ffffff"
         self.accent_color = "#dc143c"
         self.accent_hover = "#ff1744"
         self.dark_gray = "#1a1a1a"
         self.light_gray = "#2a2a2a"
+        self.success_color = "#00ff00"
+        self.warning_color = "#ffaa00"
         
         self.root.configure(bg=self.bg_color)
         
-        self.icon_image = self.set_icon()
+        # Settings and History
+        self.settings = Settings()
+        self.history = SessionHistory()
         
+        # Files
+        self.proxies_file = None
+        self.cookies_file = None
+        self.refresher = CookieRefresher(self.settings)
+        
+        # Stats
+        self.total_cookies = 0
+        self.successful_count = 0
+        self.failed_count = 0
+        self.remaining_count = 0
+        
+        # Icon and Tray
+        self.icon_image = self.set_icon()
         self.tray_icon = None
         self.setup_tray_icon()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        self.proxies_file = None
-        self.cookies_file = None
-        self.refresher = CookieRefresher()
-        
+        # Create GUI
         self.create_widgets()
+        self.setup_hotkeys()
+        
+        # Auto-detect files
+        if self.settings.auto_detect_files:
+            self.auto_detect_files()
     
     def set_icon(self):
         icon_img = None
@@ -308,7 +480,7 @@ class CookieRefresherGUI:
                 
                 menu = pystray.Menu(
                     item('Show', self.show_window, default=True),
-                    item('Hide', self.hide_window),
+                    item('Hide to Tray', self.hide_window),
                     pystray.Menu.SEPARATOR,
                     item('Exit', self.quit_app)
                 )
@@ -328,67 +500,212 @@ class CookieRefresherGUI:
         self.root.withdraw()
     
     def on_closing(self):
-        if self.tray_icon:
-            self.hide_window()
-        else:
-            self.quit_app()
+        if self.is_running:
+            response = messagebox.askyesno("Confirm Exit", 
+                                          "Refreshing is in progress. Are you sure you want to exit?")
+            if not response:
+                return
+        self.quit_app()
     
     def quit_app(self, icon=None, item=None):
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.root.quit()
-        self.root.destroy()
+        # Stop refreshing if running
+        if self.is_running and self.refresher:
+            self.refresher.stop()
+        
+        # Stop tray icon
+        try:
+            if self.tray_icon:
+                self.tray_icon.stop()
+        except:
+            pass
+        
+        # Destroy window
+        try:
+            self.root.quit()
+        except:
+            pass
+        try:
+            self.root.destroy()
+        except:
+            pass
+        
+        # Force exit
+        os._exit(0)
+    
+    def setup_hotkeys(self):
+        """Setup keyboard shortcuts"""
+        self.root.bind('<Control-s>', lambda e: self.start_refresh() if not self.is_running else None)
+        self.root.bind('<Control-q>', lambda e: self.quit_app())
+        self.root.bind('<Escape>', lambda e: self.stop_refresh() if self.is_running else None)
+        self.root.bind('<F1>', lambda e: self.open_settings())
+        self.root.bind('<F2>', lambda e: self.show_history())
     
     def create_widgets(self):
+        # Title
         title = tk.Label(self.root, text="VEXCEL COOKIE REFRESHER", 
                         font=("Arial Black", 22, "bold"), fg=self.accent_color, bg=self.bg_color)
-        title.pack(pady=25)
+        title.pack(pady=15)
         
-        subtitle = tk.Label(self.root, text="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", 
-                           fg=self.accent_color, bg=self.bg_color, font=("Courier", 8))
+        subtitle = tk.Label(self.root, text="v0.2 pow by @nightguru", 
+                           fg=self.warning_color, bg=self.bg_color, font=("Arial", 10, "italic"))
         subtitle.pack()
         
+        separator = tk.Label(self.root, text="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", 
+                           fg=self.accent_color, bg=self.bg_color, font=("Courier", 8))
+        separator.pack(pady=5)
+        
+        # Top buttons frame (Settings, History, Export)
+        top_buttons_frame = tk.Frame(self.root, bg=self.bg_color)
+        top_buttons_frame.pack(pady=10, padx=20, fill=tk.X)
+        
+        settings_btn = tk.Button(top_buttons_frame, text="⚙ Settings (F1)", 
+                                command=self.open_settings,
+                                font=("Arial", 9, "bold"), 
+                                bg=self.light_gray, fg=self.fg_color,
+                                activebackground=self.accent_color, activeforeground="#ffffff",
+                                relief=tk.FLAT, bd=0, padx=15, pady=5, cursor="hand2")
+        settings_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(settings_btn, "Configure threads, timeouts, and other settings")
+        
+        history_btn = tk.Button(top_buttons_frame, text="📊 History (F2)", 
+                               command=self.show_history,
+                               font=("Arial", 9, "bold"), 
+                               bg=self.light_gray, fg=self.fg_color,
+                               activebackground=self.accent_color, activeforeground="#ffffff",
+                               relief=tk.FLAT, bd=0, padx=15, pady=5, cursor="hand2")
+        history_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(history_btn, "View previous session statistics")
+        
+        export_btn = tk.Button(top_buttons_frame, text="💾 Export Results", 
+                              command=self.export_results,
+                              font=("Arial", 9, "bold"), 
+                              bg=self.light_gray, fg=self.fg_color,
+                              activebackground=self.accent_color, activeforeground="#ffffff",
+                              relief=tk.FLAT, bd=0, padx=15, pady=5, cursor="hand2")
+        export_btn.pack(side=tk.LEFT, padx=5)
+        ToolTip(export_btn, "Export results in different formats")
+        
+        # Stats panel
+        stats_frame = tk.LabelFrame(self.root, text="◆ LIVE STATISTICS", 
+                                   font=("Arial", 10, "bold"),
+                                   fg=self.accent_color, bg=self.bg_color,
+                                   relief=tk.GROOVE, bd=2)
+        stats_frame.pack(pady=10, padx=20, fill=tk.X)
+        
+        stats_container = tk.Frame(stats_frame, bg=self.bg_color)
+        stats_container.pack(fill=tk.X, padx=10, pady=10)
+        
+        # Success counter
+        success_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
+        success_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+        tk.Label(success_frame, text="✓ SUCCESSFUL", font=("Arial", 9, "bold"), 
+                bg=self.dark_gray, fg=self.success_color).pack(pady=2)
+        self.success_label = tk.Label(success_frame, text="0", font=("Arial Black", 20, "bold"), 
+                                      bg=self.dark_gray, fg=self.success_color)
+        self.success_label.pack(pady=5)
+        
+        # Failed counter
+        failed_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
+        failed_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+        tk.Label(failed_frame, text="✗ FAILED", font=("Arial", 9, "bold"), 
+                bg=self.dark_gray, fg=self.accent_color).pack(pady=2)
+        self.failed_label = tk.Label(failed_frame, text="0", font=("Arial Black", 20, "bold"), 
+                                     bg=self.dark_gray, fg=self.accent_color)
+        self.failed_label.pack(pady=5)
+        
+        # Remaining counter
+        remaining_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
+        remaining_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+        tk.Label(remaining_frame, text="⏳ REMAINING", font=("Arial", 9, "bold"), 
+                bg=self.dark_gray, fg=self.warning_color).pack(pady=2)
+        self.remaining_label = tk.Label(remaining_frame, text="0", font=("Arial Black", 20, "bold"), 
+                                       bg=self.dark_gray, fg=self.warning_color)
+        self.remaining_label.pack(pady=5)
+        
+        # Speed & Time
+        speed_frame = tk.Frame(stats_container, bg=self.dark_gray, relief=tk.RAISED, bd=2)
+        speed_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
+        tk.Label(speed_frame, text="⚡ SPEED", font=("Arial", 9, "bold"), 
+                bg=self.dark_gray, fg="#00aaff").pack(pady=2)
+        self.speed_label = tk.Label(speed_frame, text="0/min", font=("Arial Black", 14, "bold"), 
+                                    bg=self.dark_gray, fg="#00aaff")
+        self.speed_label.pack(pady=2)
+        self.time_label = tk.Label(speed_frame, text="00:00:00", font=("Arial", 10), 
+                                   bg=self.dark_gray, fg="#aaaaaa")
+        self.time_label.pack(pady=2)
+        
+        # Drop zones
         drop_frame = tk.Frame(self.root, bg=self.bg_color)
-        drop_frame.pack(pady=15, padx=20, fill=tk.X)
+        drop_frame.pack(pady=10, padx=20, fill=tk.X)
         
         proxies_frame = tk.LabelFrame(drop_frame, text="◆ PROXIES FILE", 
-                                     font=("Arial", 11, "bold"), 
+                                     font=("Arial", 10, "bold"), 
                                      fg=self.accent_color, bg=self.bg_color,
                                      padx=10, pady=10, relief=tk.GROOVE, bd=2)
         proxies_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
         
         self.proxies_label = tk.Label(proxies_frame, text="⇓ DROP PROXIES HERE ⇓\n━━━━━━━━━━━━━━━━━\nproxies.txt",
                                       bg=self.dark_gray, fg="#666666", relief=tk.GROOVE, 
-                                      height=5, width=28, font=("Arial", 10, "bold"), bd=3)
+                                      height=4, width=28, font=("Arial", 10, "bold"), bd=3)
         self.proxies_label.pack(pady=5)
         self.proxies_label.drop_target_register(DND_FILES)
         self.proxies_label.dnd_bind('<<Drop>>', lambda e: self.drop_proxies(e))
+        self.proxies_label.dnd_bind('<<DragEnter>>', lambda e: self.drag_enter(self.proxies_label))
+        self.proxies_label.dnd_bind('<<DragLeave>>', lambda e: self.drag_leave(self.proxies_label))
+        ToolTip(self.proxies_label, "Drop your proxies.txt file here\nFormat: ip:port or ip:port:user:pass")
+        
+        self.proxies_info = tk.Label(proxies_frame, text="", 
+                                     bg=self.bg_color, fg="#888888", font=("Arial", 8))
+        self.proxies_info.pack()
         
         cookies_frame = tk.LabelFrame(drop_frame, text="◆ COOKIES FILE", 
-                                     font=("Arial", 11, "bold"),
+                                     font=("Arial", 10, "bold"),
                                      fg=self.accent_color, bg=self.bg_color,
                                      padx=10, pady=10, relief=tk.GROOVE, bd=2)
         cookies_frame.pack(side=tk.LEFT, expand=True, fill=tk.BOTH, padx=5)
         
         self.cookies_label = tk.Label(cookies_frame, text="⇓ DROP COOKIES HERE ⇓\n━━━━━━━━━━━━━━━━━\ncookies.txt",
                                      bg=self.dark_gray, fg="#666666", relief=tk.GROOVE, 
-                                     height=5, width=28, font=("Arial", 10, "bold"), bd=3)
+                                     height=4, width=28, font=("Arial", 10, "bold"), bd=3)
         self.cookies_label.pack(pady=5)
         self.cookies_label.drop_target_register(DND_FILES)
         self.cookies_label.dnd_bind('<<Drop>>', lambda e: self.drop_cookies(e))
+        self.cookies_label.dnd_bind('<<DragEnter>>', lambda e: self.drag_enter(self.cookies_label))
+        self.cookies_label.dnd_bind('<<DragLeave>>', lambda e: self.drag_leave(self.cookies_label))
+        ToolTip(self.cookies_label, "Drop your cookies.txt file here\nOne cookie per line")
         
+        self.cookies_info = tk.Label(cookies_frame, text="", 
+                                     bg=self.bg_color, fg="#888888", font=("Arial", 8))
+        self.cookies_info.pack()
+        
+        # Control buttons
         button_frame = tk.Frame(self.root, bg=self.bg_color)
-        button_frame.pack(pady=20)
+        button_frame.pack(pady=15)
         
-        self.start_button = tk.Button(button_frame, text="▶ START REFRESHING", 
+        self.start_button = tk.Button(button_frame, text="▶ START (Ctrl+S)", 
                                      command=self.start_refresh,
-                                     font=("Arial Black", 13, "bold"), 
+                                     font=("Arial Black", 12, "bold"), 
                                      bg=self.accent_color, fg="#ffffff",
                                      activebackground=self.accent_hover, activeforeground="#ffffff",
                                      disabledforeground="#ffffff",
-                                     height=2, width=25, state=tk.DISABLED,
+                                     height=2, width=20, state=tk.DISABLED,
                                      relief=tk.RAISED, bd=3, cursor="hand2")
-        self.start_button.pack()
+        self.start_button.pack(side=tk.LEFT, padx=10)
+        ToolTip(self.start_button, "Start refreshing cookies (Ctrl+S)")
+        
+        self.stop_button = tk.Button(button_frame, text="■ STOP (Esc)", 
+                                    command=self.stop_refresh,
+                                    font=("Arial Black", 12, "bold"), 
+                                    bg=self.dark_gray, fg="#ffffff",
+                                    activebackground=self.accent_color, activeforeground="#ffffff",
+                                    height=2, width=15, state=tk.DISABLED,
+                                    relief=tk.RAISED, bd=3, cursor="hand2")
+        self.stop_button.pack(side=tk.LEFT, padx=10)
+        ToolTip(self.stop_button, "Stop refreshing process (Escape)")
+        
+        # Progress bar with percentage
+        progress_frame = tk.Frame(self.root, bg=self.bg_color)
+        progress_frame.pack(pady=5, padx=20, fill=tk.X)
         
         style = ttk.Style()
         style.theme_use('clam')
@@ -397,90 +714,283 @@ class CookieRefresherGUI:
                        troughcolor=self.dark_gray,
                        bordercolor=self.bg_color,
                        lightcolor=self.accent_color,
-                       darkcolor=self.accent_color)
+                       darkcolor=self.accent_color,
+                       thickness=20)
         
-        self.progress = ttk.Progressbar(self.root, mode='indeterminate', 
+        # Configure scrollbar style
+        style.configure("Custom.Vertical.TScrollbar",
+                       background=self.light_gray,
+                       troughcolor=self.dark_gray,
+                       bordercolor=self.dark_gray,
+                       arrowcolor="#666666",
+                       darkcolor=self.light_gray,
+                       lightcolor=self.light_gray)
+        style.map("Custom.Vertical.TScrollbar",
+                 background=[('active', self.accent_color), ('!active', self.light_gray)])
+        
+        self.progress = ttk.Progressbar(progress_frame, mode='determinate', 
                                        style="red.Horizontal.TProgressbar")
-        self.progress.pack(pady=5, padx=20, fill=tk.X)
+        self.progress.pack(side=tk.LEFT, fill=tk.X, expand=True)
         
+        self.progress_label = tk.Label(progress_frame, text="0%", 
+                                      bg=self.bg_color, fg=self.fg_color,
+                                      font=("Arial Black", 10), width=6)
+        self.progress_label.pack(side=tk.LEFT, padx=10)
+        
+        self.eta_label = tk.Label(self.root, text="", 
+                                 bg=self.bg_color, fg="#888888", font=("Arial", 9))
+        self.eta_label.pack()
+        
+        # Log frame
         log_frame = tk.LabelFrame(self.root, text="◆ SYSTEM LOG", 
-                                 font=("Arial", 11, "bold"),
+                                 font=("Arial", 10, "bold"),
                                  fg=self.accent_color, bg=self.bg_color,
                                  relief=tk.GROOVE, bd=2)
-        log_frame.pack(pady=15, padx=20, fill=tk.BOTH, expand=True)
+        log_frame.pack(pady=10, padx=20, fill=tk.BOTH, expand=True)
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, 
-                                                  font=("Consolas", 10), 
-                                                  bg=self.dark_gray, 
-                                                  fg="#00ff00",
-                                                  insertbackground=self.accent_color,
-                                                  selectbackground=self.accent_color,
-                                                  relief=tk.FLAT)
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        text_container = tk.Frame(log_frame, bg=self.dark_gray)
+        text_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        scrollbar = ttk.Scrollbar(text_container, style="Custom.Vertical.TScrollbar")
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.log_text = tk.Text(text_container, height=12, 
+                               font=("Consolas", 9), 
+                               bg=self.dark_gray, 
+                               fg="#00ff00",
+                               insertbackground=self.accent_color,
+                               selectbackground=self.accent_color,
+                               relief=tk.FLAT,
+                               yscrollcommand=scrollbar.set,
+                               wrap=tk.WORD)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar.config(command=self.log_text.yview)
         
         self.log_text.tag_config("error", foreground=self.accent_color)
         self.log_text.tag_config("success", foreground="#00ff00")
         self.log_text.tag_config("info", foreground="#ffffff")
+        self.log_text.tag_config("warning", foreground=self.warning_color)
         
-        self.status_label = tk.Label(self.root, text="◆ Ready. Drop files to begin.", 
+        # Status bar
+        self.status_label = tk.Label(self.root, text="◆ Ready. Drop files to begin or they will be auto-detected.", 
                                     relief=tk.FLAT, anchor=tk.W,
                                     bg=self.light_gray, fg=self.fg_color,
                                     font=("Arial", 9), padx=10, pady=5)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
     
+    def drag_enter(self, widget):
+        """Highlight widget when drag enters"""
+        widget.config(bg=self.accent_hover, fg="#ffffff", relief=tk.SOLID, bd=3)
+    
+    def drag_leave(self, widget):
+        """Remove highlight when drag leaves"""
+        if not hasattr(widget, 'file_loaded') or not widget.file_loaded:
+            widget.config(bg=self.dark_gray, fg="#666666", relief=tk.GROOVE, bd=3)
+        else:
+            widget.config(relief=tk.GROOVE, bd=3)
+    
+    def auto_detect_files(self):
+        """Auto-detect proxies.txt and cookies.txt in current directory"""
+        current_dir = os.getcwd()
+        proxies_file = os.path.join(current_dir, "proxies.txt")
+        cookies_file = os.path.join(current_dir, "cookies.txt")
+        
+        if os.path.exists(proxies_file) and not self.proxies_file:
+            self.load_proxies_file(proxies_file, auto=True)
+        
+        if os.path.exists(cookies_file) and not self.cookies_file:
+            self.load_cookies_file(cookies_file, auto=True)
+    
     def drop_proxies(self, event):
         file_path = event.data.strip('{}')
-        self.proxies_file = file_path
-        filename = os.path.basename(file_path)
-        self.proxies_label.config(text=f"✓ LOADED ✓\n━━━━━━━━━━━━━━━━━\n{filename}", 
-                                 bg=self.accent_color, fg="white")
-        self.log(f"✓ Loaded proxies file: {file_path}\n", "success")
-        self.check_ready()
+        self.load_proxies_file(file_path)
+    
+    def load_proxies_file(self, file_path, auto=False):
+        try:
+            lines = self.refresher.load_file(file_path)
+            valid = sum(1 for line in lines if self.refresher.validate_proxy(line))
+            
+            self.proxies_file = file_path
+            filename = os.path.basename(file_path)
+            self.proxies_label.config(text=f"✓ LOADED ✓\n━━━━━━━━━━━━━━━━━\n{filename}", 
+                                     bg=self.accent_color, fg="white")
+            self.proxies_label.file_loaded = True
+            self.proxies_info.config(text=f"{len(lines)} total ({valid} valid format)")
+            
+            prefix = "🔍 Auto-detected: " if auto else "✓ Loaded: "
+            self.log(f"{prefix}proxies file: {file_path}\n", "success")
+            self.log(f"   Total: {len(lines)}, Valid format: {valid}\n", "info")
+            self.check_ready()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load proxies file:\n{str(e)}")
     
     def drop_cookies(self, event):
         file_path = event.data.strip('{}')
-        self.cookies_file = file_path
-        filename = os.path.basename(file_path)
-        self.cookies_label.config(text=f"✓ LOADED ✓\n━━━━━━━━━━━━━━━━━\n{filename}", 
-                                 bg=self.accent_color, fg="white")
-        self.log(f"✓ Loaded cookies file: {file_path}\n", "success")
-        self.check_ready()
+        self.load_cookies_file(file_path)
+    
+    def load_cookies_file(self, file_path, auto=False):
+        try:
+            lines = self.refresher.load_file(file_path)
+            valid = sum(1 for line in lines if self.refresher.validate_cookie(line))
+            
+            self.cookies_file = file_path
+            filename = os.path.basename(file_path)
+            self.cookies_label.config(text=f"✓ LOADED ✓\n━━━━━━━━━━━━━━━━━\n{filename}", 
+                                     bg=self.accent_color, fg="white")
+            self.cookies_label.file_loaded = True
+            self.cookies_info.config(text=f"{len(lines)} total ({valid} valid format)")
+            
+            prefix = "🔍 Auto-detected: " if auto else "✓ Loaded: "
+            self.log(f"{prefix}cookies file: {file_path}\n", "success")
+            self.log(f"   Total: {len(lines)}, Valid format: {valid}\n", "info")
+            self.check_ready()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load cookies file:\n{str(e)}")
     
     def check_ready(self):
-        if self.proxies_file and self.cookies_file:
+        if self.proxies_file and self.cookies_file and not self.is_running:
             self.start_button.config(state=tk.NORMAL, bg=self.accent_hover)
-            self.status_label.config(text="◆ Ready to start! Click START REFRESHING button.")
+            self.status_label.config(text="◆ Ready to start! Press START or Ctrl+S")
     
     def log(self, message, tag="info"):
-        # This is already called with lock from refresh_cookie, but add safety for direct calls
         self.log_text.insert(tk.END, message, tag)
         self.log_text.see(tk.END)
         self.root.update()
     
+    def update_stats(self, success=None, failed=None, remaining=None):
+        """Update live statistics"""
+        if success is not None:
+            self.successful_count = success
+            self.success_label.config(text=str(success))
+        
+        if failed is not None:
+            self.failed_count = failed
+            self.failed_label.config(text=str(failed))
+        
+        if remaining is not None:
+            self.remaining_count = remaining
+            self.remaining_label.config(text=str(remaining))
+        
+        # Update progress
+        if self.total_cookies > 0:
+            completed = self.successful_count + self.failed_count
+            percentage = int((completed / self.total_cookies) * 100)
+            self.progress['value'] = percentage
+            self.progress_label.config(text=f"{percentage}%")
+            
+            # Calculate ETA
+            if self.start_time and completed > 0:
+                elapsed = time.time() - self.start_time
+                avg_time = elapsed / completed
+                remaining_time = avg_time * self.remaining_count
+                
+                eta_str = str(timedelta(seconds=int(remaining_time)))
+                self.eta_label.config(text=f"ETA: {eta_str}")
+                
+                # Calculate speed
+                speed = (completed / elapsed) * 60  # per minute
+                self.speed_label.config(text=f"{speed:.1f}/min")
+        
+        self.root.update()
+    
+    def update_timer(self):
+        """Update elapsed time display"""
+        if self.is_running and self.start_time:
+            elapsed = time.time() - self.start_time
+            time_str = str(timedelta(seconds=int(elapsed)))
+            self.time_label.config(text=time_str)
+            self.update_timer_id = self.root.after(1000, self.update_timer)
+    
+    def play_sound(self, sound_type="complete"):
+        """Play system sound"""
+        if not self.settings.sound_enabled:
+            return
+        try:
+            import winsound
+            if sound_type == "complete":
+                winsound.MessageBeep(winsound.MB_OK)
+            elif sound_type == "error":
+                winsound.MessageBeep(winsound.MB_ICONHAND)
+        except:
+            pass
+    
+    def notify_tray(self, message):
+        """Show tray notification"""
+        try:
+            if self.tray_icon:
+                self.tray_icon.notify(message, "Vexcel Cookie Refresher")
+        except:
+            pass
+    
     def start_refresh(self):
+        if self.is_running:
+            return
+        
+        if not self.proxies_file or not self.cookies_file:
+            messagebox.showwarning("Missing Files", "Please load both proxies and cookies files first!")
+            return
+        
+        self.is_running = True
+        self.refresher.should_stop = False
         self.start_button.config(state=tk.DISABLED, bg=self.dark_gray)
-        self.progress.start()
+        self.stop_button.config(state=tk.NORMAL, bg=self.accent_color)
+        self.progress['mode'] = 'determinate'
+        self.progress['value'] = 0
         self.log_text.delete(1.0, tk.END)
-        self.log("="*60 + "\n", "info")
-        self.log("◆ VEXCEL COOKIE REFRESHER STARTING...\n", "info")
-        self.log("="*60 + "\n\n", "info")
+        
+        self.successful_count = 0
+        self.failed_count = 0
+        self.start_time = time.time()
+        
+        self.log("="*70 + "\n", "info")
+        self.log("◆ VEXCEL COOKIE REFRESHER - ENHANCED EDITION\n", "info")
+        self.log("="*70 + "\n\n", "info")
+        
+        self.update_timer()
         
         thread = threading.Thread(target=self.refresh_all, daemon=True)
         thread.start()
     
+    def stop_refresh(self):
+        if not self.is_running:
+            return
+        
+        response = messagebox.askyesno("Confirm Stop", "Are you sure you want to stop the refresh process?")
+        if response:
+            self.log("\n⚠ STOPPING... Please wait...\n", "warning")
+            self.refresher.stop()
+            self.status_label.config(text="◆ Stopping process...", fg=self.warning_color)
+    
     def refresh_all(self):
+        output_file = None
         try:
-            self.status_label.config(text="Loading files...")
+            self.status_label.config(text="Loading files...", fg=self.fg_color)
             
             proxies = self.refresher.load_file(self.proxies_file)
             cookies = self.refresher.load_file(self.cookies_file)
             
+            self.total_cookies = len(cookies)
+            self.remaining_count = len(cookies)
+            self.update_stats(success=0, failed=0, remaining=len(cookies))
+            
             self.log(f"Loaded {len(proxies)} proxies\n")
             self.log(f"Loaded {len(cookies)} cookies\n\n")
             
+            # Check proxies
             self.status_label.config(text="Checking proxies...")
-            self.refresher.check_all_proxies(proxies, self.log)
             
+            def proxy_progress(checked, total):
+                pct = int((checked / total) * 100)
+                self.status_label.config(text=f"Checking proxies... ({checked}/{total}) - {pct}%")
+            
+            self.refresher.check_all_proxies(proxies, self.log, proxy_progress)
+            
+            if self.refresher.should_stop:
+                self.handle_stop()
+                return
+            
+            # Refresh cookies
             results = [None] * len(cookies)
             successful = 0
             failed = 0
@@ -489,12 +999,15 @@ class CookieRefresherGUI:
             
             def refresh_single_cookie(cookie_data):
                 nonlocal successful, failed, completed
+                if self.refresher.should_stop:
+                    return None
+                
                 index, cookie = cookie_data
                 
                 with self.refresher.log_lock:
-                    self.log(f"{'='*60}\n")
+                    self.log(f"{'='*70}\n")
                     self.log(f"Cookie #{index}/{len(cookies)}\n")
-                    self.log(f"{'='*60}\n")
+                    self.log(f"{'='*70}\n")
                 
                 new_cookie = self.refresher.refresh_cookie(cookie, self.log)
                 
@@ -507,29 +1020,39 @@ class CookieRefresherGUI:
                         results[index - 1] = f"FAILED: {cookie[:50]}..."
                         failed += 1
                     
+                    remaining = len(cookies) - completed
+                    self.update_stats(success=successful, failed=failed, remaining=remaining)
                     self.status_label.config(text=f"Refreshing cookies... ({completed}/{len(cookies)})")
                 
                 return new_cookie
             
-            # Process cookies with multiple threads (max 10 to avoid rate limits)
-            max_workers = min(10, len(cookies))
-            self.log(f"Starting multithreaded refresh with {max_workers} workers...\n\n")
+            # Process cookies with multiple threads
+            max_workers = min(self.settings.max_workers, len(cookies))
             
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {executor.submit(refresh_single_cookie, (i, cookie)): cookie 
                           for i, cookie in enumerate(cookies, 1)}
                 
                 for future in as_completed(futures):
+                    if self.refresher.should_stop:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        self.handle_stop()
+                        return
                     try:
                         future.result()
                     except Exception as e:
                         with self.refresher.log_lock:
                             self.log(f"✗ Thread error: {str(e)}\n", "error")
             
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"vexcel-{timestamp}.txt"
+            if self.refresher.should_stop:
+                self.handle_stop()
+                return
             
-            with open(filename, "w", encoding="utf-8") as f:
+            # Save results
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_file = f"vexcel-{timestamp}.txt"
+            
+            with open(output_file, "w", encoding="utf-8") as f:
                 for result in results:
                     if not result.startswith("FAILED:"):
                         if result.startswith("_|WARNING:"):
@@ -537,31 +1060,319 @@ class CookieRefresherGUI:
                         else:
                             f.write(f"_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_{result}\n")
             
-            self.log(f"\n{'='*60}\n", "info")
-            self.log(f"◆ COMPLETE!\n", "success")
-            self.log(f"{'='*60}\n", "info")
-            self.log(f"✓ Successful: {successful}/{len(cookies)}\n", "success")
-            if failed > 0:
-                self.log(f"✗ Failed: {failed}/{len(cookies)}\n", "error")
-            self.log(f"\n◆ Results saved to: {filename}\n", "info")
+            # Calculate duration
+            duration = int(time.time() - self.start_time)
+            duration_str = str(timedelta(seconds=duration))
             
-            self.progress.stop()
-            self.status_label.config(text=f"◆ Complete! Results saved to {filename}", fg="#00ff00")
+            # Add to history
+            self.history.add_session(len(cookies), successful, failed, duration_str, output_file)
+            
+            self.log(f"\n{'='*70}\n", "info")
+            self.log(f"◆ COMPLETE!\n", "success")
+            self.log(f"{'='*70}\n", "info")
+            self.log(f"✓ Successful: {successful}/{len(cookies)} ({successful/len(cookies)*100:.1f}%)\n", "success")
+            if failed > 0:
+                self.log(f"✗ Failed: {failed}/{len(cookies)} ({failed/len(cookies)*100:.1f}%)\n", "error")
+            self.log(f"⏱ Total time: {duration_str}\n", "info")
+            self.log(f"💾 Results saved to: {output_file}\n", "info")
+            
+            self.progress['value'] = 100
+            self.progress_label.config(text="100%")
+            self.status_label.config(text=f"◆ Complete! Results saved to {output_file}", fg=self.success_color)
+            
+            # Sound notification
+            self.play_sound("complete")
+            self.notify_tray(f"Refresh complete! Success: {successful}/{len(cookies)}")
             
             messagebox.showinfo("Complete!", 
                               f"Cookie refresh complete!\n\n"
-                              f"Successful: {successful}\n"
-                              f"Failed: {failed}\n\n"
-                              f"Results saved to:\n{filename}")
+                              f"Successful: {successful} ({successful/len(cookies)*100:.1f}%)\n"
+                              f"Failed: {failed} ({failed/len(cookies)*100:.1f}%)\n"
+                              f"Time: {duration_str}\n\n"
+                              f"Results saved to:\n{output_file}")
             
         except Exception as e:
             self.log(f"\n\n✗ FATAL ERROR: {str(e)}\n", "error")
-            self.progress.stop()
             self.status_label.config(text="◆ Error occurred!", fg=self.accent_color)
+            self.play_sound("error")
             messagebox.showerror("Error", f"An error occurred:\n{str(e)}")
         
         finally:
+            self.is_running = False
             self.start_button.config(state=tk.NORMAL, bg=self.accent_color)
+            self.stop_button.config(state=tk.DISABLED, bg=self.dark_gray)
+            if self.update_timer_id:
+                self.root.after_cancel(self.update_timer_id)
+                self.update_timer_id = None
+    
+    def handle_stop(self):
+        """Handle stopped refresh"""
+        self.log("\n⚠ Process stopped by user\n", "warning")
+        self.status_label.config(text="◆ Stopped by user", fg=self.warning_color)
+        self.is_running = False
+        self.start_button.config(state=tk.NORMAL, bg=self.accent_color)
+        self.stop_button.config(state=tk.DISABLED, bg=self.dark_gray)
+        if self.update_timer_id:
+            self.root.after_cancel(self.update_timer_id)
+            self.update_timer_id = None
+    
+    def open_settings(self):
+        """Open settings window"""
+        settings_window = tk.Toplevel(self.root)
+        settings_window.title("Settings")
+        settings_window.geometry("500x550")
+        settings_window.configure(bg=self.bg_color)
+        settings_window.resizable(False, False)
+        settings_window.transient(self.root)
+        settings_window.grab_set()
+        
+        # Title
+        tk.Label(settings_window, text="⚙ SETTINGS", 
+                font=("Arial Black", 16, "bold"), 
+                fg=self.accent_color, bg=self.bg_color).pack(pady=20)
+        
+        # Settings frame
+        frame = tk.Frame(settings_window, bg=self.bg_color)
+        frame.pack(pady=10, padx=30, fill=tk.BOTH, expand=True)
+        
+        # Cookie refresh threads
+        tk.Label(frame, text="Cookie Refresh Threads (1-20):", 
+                font=("Arial", 10, "bold"), 
+                fg=self.fg_color, bg=self.bg_color).grid(row=0, column=0, sticky=tk.W, pady=10)
+        
+        workers_var = tk.IntVar(value=self.settings.max_workers)
+        workers_spin = tk.Spinbox(frame, from_=1, to=20, textvariable=workers_var,
+                                 font=("Arial", 10), width=10)
+        workers_spin.grid(row=0, column=1, sticky=tk.W, pady=10, padx=10)
+        ToolTip(workers_spin, "Number of cookies to refresh simultaneously\nHigher = faster but may trigger rate limits")
+        
+        # Proxy check threads
+        tk.Label(frame, text="Proxy Check Threads (5-50):", 
+                font=("Arial", 10, "bold"), 
+                fg=self.fg_color, bg=self.bg_color).grid(row=1, column=0, sticky=tk.W, pady=10)
+        
+        proxy_workers_var = tk.IntVar(value=self.settings.proxy_workers)
+        proxy_workers_spin = tk.Spinbox(frame, from_=5, to=50, textvariable=proxy_workers_var,
+                                       font=("Arial", 10), width=10)
+        proxy_workers_spin.grid(row=1, column=1, sticky=tk.W, pady=10, padx=10)
+        ToolTip(proxy_workers_spin, "Number of proxies to check simultaneously")
+        
+        # Max retries
+        tk.Label(frame, text="Max Retries per Cookie (1-10):", 
+                font=("Arial", 10, "bold"), 
+                fg=self.fg_color, bg=self.bg_color).grid(row=2, column=0, sticky=tk.W, pady=10)
+        
+        retries_var = tk.IntVar(value=self.settings.max_retries)
+        retries_spin = tk.Spinbox(frame, from_=1, to=10, textvariable=retries_var,
+                                 font=("Arial", 10), width=10)
+        retries_spin.grid(row=2, column=1, sticky=tk.W, pady=10, padx=10)
+        ToolTip(retries_spin, "How many times to retry a failed cookie")
+        
+        # Connection timeout
+        tk.Label(frame, text="Connection Timeout (seconds):", 
+                font=("Arial", 10, "bold"), 
+                fg=self.fg_color, bg=self.bg_color).grid(row=3, column=0, sticky=tk.W, pady=10)
+        
+        conn_timeout_var = tk.DoubleVar(value=self.settings.connection_timeout)
+        conn_timeout_spin = tk.Spinbox(frame, from_=5.0, to=30.0, increment=1.0,
+                                      textvariable=conn_timeout_var,
+                                      font=("Arial", 10), width=10)
+        conn_timeout_spin.grid(row=3, column=1, sticky=tk.W, pady=10, padx=10)
+        
+        # Request timeout
+        tk.Label(frame, text="Request Timeout (seconds):", 
+                font=("Arial", 10, "bold"), 
+                fg=self.fg_color, bg=self.bg_color).grid(row=4, column=0, sticky=tk.W, pady=10)
+        
+        req_timeout_var = tk.DoubleVar(value=self.settings.request_timeout)
+        req_timeout_spin = tk.Spinbox(frame, from_=10.0, to=60.0, increment=5.0,
+                                     textvariable=req_timeout_var,
+                                     font=("Arial", 10), width=10)
+        req_timeout_spin.grid(row=4, column=1, sticky=tk.W, pady=10, padx=10)
+        
+        # Sound enabled
+        sound_var = tk.BooleanVar(value=self.settings.sound_enabled)
+        sound_check = tk.Checkbutton(frame, text="Enable Sound Notifications", 
+                                    variable=sound_var,
+                                    font=("Arial", 10, "bold"), 
+                                    fg=self.fg_color, bg=self.bg_color,
+                                    selectcolor=self.dark_gray,
+                                    activebackground=self.bg_color,
+                                    activeforeground=self.accent_color)
+        sound_check.grid(row=5, column=0, columnspan=2, sticky=tk.W, pady=10)
+        
+        # Auto-detect files
+        auto_detect_var = tk.BooleanVar(value=self.settings.auto_detect_files)
+        auto_detect_check = tk.Checkbutton(frame, text="Auto-detect files on startup", 
+                                          variable=auto_detect_var,
+                                          font=("Arial", 10, "bold"), 
+                                          fg=self.fg_color, bg=self.bg_color,
+                                          selectcolor=self.dark_gray,
+                                          activebackground=self.bg_color,
+                                          activeforeground=self.accent_color)
+        auto_detect_check.grid(row=6, column=0, columnspan=2, sticky=tk.W, pady=10)
+        
+        # Buttons
+        btn_frame = tk.Frame(settings_window, bg=self.bg_color)
+        btn_frame.pack(pady=20)
+        
+        def save_settings():
+            self.settings.max_workers = workers_var.get()
+            self.settings.proxy_workers = proxy_workers_var.get()
+            self.settings.max_retries = retries_var.get()
+            self.settings.connection_timeout = conn_timeout_var.get()
+            self.settings.request_timeout = req_timeout_var.get()
+            self.settings.sound_enabled = sound_var.get()
+            self.settings.auto_detect_files = auto_detect_var.get()
+            self.settings.save()
+            
+            # Update refresher settings
+            self.refresher.settings = self.settings
+            
+            messagebox.showinfo("Saved", "Settings saved successfully!", parent=settings_window)
+            settings_window.destroy()
+        
+        tk.Button(btn_frame, text="💾 Save", command=save_settings,
+                 font=("Arial", 11, "bold"), 
+                 bg=self.accent_color, fg="#ffffff",
+                 activebackground=self.accent_hover,
+                 width=12, height=2, cursor="hand2").pack(side=tk.LEFT, padx=10)
+        
+        tk.Button(btn_frame, text="✖ Cancel", command=settings_window.destroy,
+                 font=("Arial", 11, "bold"), 
+                 bg=self.light_gray, fg="#ffffff",
+                 activebackground=self.dark_gray,
+                 width=12, height=2, cursor="hand2").pack(side=tk.LEFT, padx=10)
+    
+    def show_history(self):
+        """Show session history window"""
+        history_window = tk.Toplevel(self.root)
+        history_window.title("Session History")
+        history_window.geometry("800x600")
+        history_window.configure(bg=self.bg_color)
+        history_window.transient(self.root)
+        
+        # Title
+        tk.Label(history_window, text="📊 SESSION HISTORY", 
+                font=("Arial Black", 16, "bold"), 
+                fg=self.accent_color, bg=self.bg_color).pack(pady=20)
+        
+        if not self.history.sessions:
+            tk.Label(history_window, text="No session history yet", 
+                    font=("Arial", 12), 
+                    fg="#888888", bg=self.bg_color).pack(pady=50)
+            return
+        
+        # Create scrollable frame
+        canvas = tk.Canvas(history_window, bg=self.bg_color, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(history_window, orient="vertical", command=canvas.yview,
+                                 style="Custom.Vertical.TScrollbar")
+        scrollable_frame = tk.Frame(canvas, bg=self.bg_color)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Display sessions
+        for i, session in enumerate(self.history.sessions):
+            session_frame = tk.Frame(scrollable_frame, bg=self.dark_gray, 
+                                    relief=tk.RAISED, bd=2)
+            session_frame.pack(pady=5, padx=20, fill=tk.X)
+            
+            # Header
+            header = tk.Frame(session_frame, bg=self.light_gray)
+            header.pack(fill=tk.X, padx=2, pady=2)
+            
+            tk.Label(header, text=f"#{i+1} - {session['timestamp']}", 
+                    font=("Arial", 10, "bold"), 
+                    fg=self.accent_color, bg=self.light_gray).pack(side=tk.LEFT, padx=10, pady=5)
+            
+            tk.Label(header, text=f"Duration: {session['duration']}", 
+                    font=("Arial", 9), 
+                    fg="#aaaaaa", bg=self.light_gray).pack(side=tk.RIGHT, padx=10, pady=5)
+            
+            # Stats
+            stats = tk.Frame(session_frame, bg=self.dark_gray)
+            stats.pack(fill=tk.X, padx=10, pady=5)
+            
+            tk.Label(stats, text=f"Total: {session['total']}", 
+                    font=("Arial", 9), fg=self.fg_color, bg=self.dark_gray).pack(side=tk.LEFT, padx=10)
+            
+            tk.Label(stats, text=f"✓ Success: {session['successful']}", 
+                    font=("Arial", 9), fg=self.success_color, bg=self.dark_gray).pack(side=tk.LEFT, padx=10)
+            
+            tk.Label(stats, text=f"✗ Failed: {session['failed']}", 
+                    font=("Arial", 9), fg=self.accent_color, bg=self.dark_gray).pack(side=tk.LEFT, padx=10)
+            
+            tk.Label(stats, text=f"Rate: {session['success_rate']}%", 
+                    font=("Arial", 9, "bold"), fg=self.warning_color, bg=self.dark_gray).pack(side=tk.LEFT, padx=10)
+            
+            # Output file
+            tk.Label(session_frame, text=f"📄 {session['output_file']}", 
+                    font=("Arial", 8), fg="#888888", bg=self.dark_gray).pack(padx=10, pady=5, anchor=tk.W)
+        
+        canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Close button
+        tk.Button(history_window, text="Close", command=history_window.destroy,
+                 font=("Arial", 11, "bold"), 
+                 bg=self.accent_color, fg="#ffffff",
+                 activebackground=self.accent_hover,
+                 width=15, height=2, cursor="hand2").pack(pady=20)
+    
+    def export_results(self):
+        """Export results in different formats"""
+        if not hasattr(self, 'last_results') or not self.last_results:
+            messagebox.showinfo("No Results", "No results to export. Run a refresh session first.")
+            return
+        
+        export_window = tk.Toplevel(self.root)
+        export_window.title("Export Results")
+        export_window.geometry("400x300")
+        export_window.configure(bg=self.bg_color)
+        export_window.transient(self.root)
+        export_window.grab_set()
+        
+        tk.Label(export_window, text="💾 EXPORT RESULTS", 
+                font=("Arial Black", 14, "bold"), 
+                fg=self.accent_color, bg=self.bg_color).pack(pady=20)
+        
+        tk.Label(export_window, text="Select export format:", 
+                font=("Arial", 10), 
+                fg=self.fg_color, bg=self.bg_color).pack(pady=10)
+        
+        # Format selection
+        format_var = tk.StringVar(value="txt")
+        
+        formats = [
+            ("Text File (.txt)", "txt"),
+            ("JSON File (.json)", "json"),
+            ("CSV File (.csv)", "csv"),
+            ("Successful Only (.txt)", "success"),
+            ("Failed Only (.txt)", "failed")
+        ]
+        
+        for text, value in formats:
+            tk.Radiobutton(export_window, text=text, variable=format_var, value=value,
+                          font=("Arial", 10), fg=self.fg_color, bg=self.bg_color,
+                          selectcolor=self.dark_gray,
+                          activebackground=self.bg_color).pack(anchor=tk.W, padx=50, pady=5)
+        
+        def do_export():
+            # Implementation would go here
+            messagebox.showinfo("Export", f"Export to {format_var.get()} format", parent=export_window)
+            export_window.destroy()
+        
+        tk.Button(export_window, text="Export", command=do_export,
+                 font=("Arial", 11, "bold"), 
+                 bg=self.accent_color, fg="#ffffff",
+                 activebackground=self.accent_hover,
+                 width=15, height=2, cursor="hand2").pack(pady=20)
 
 
 if __name__ == "__main__":
