@@ -15,5 +15,5 @@ After go to project directory, open terminal and run:
 
 Buy me a coffe: <code>bc1qymkdffjpqkstdwu9t2kx7gu5384myhtph23ksu</code>
 
+<img width="992" height="798" alt="image" src="https://github.com/user-attachments/assets/e9495375-98f2-4ffe-a3b7-03a60db0e131" />
 
-<img width="896" height="697" alt="image" src="https://github.com/user-attachments/assets/1bf77693-78cb-4e53-89ed-7c49c53e84f3" />
