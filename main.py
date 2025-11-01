@@ -998,7 +998,7 @@ class CookieRefresherGUI:
                         results[index - 1] = new_cookie
                         successful += 1
                     else:
-                        results[index - 1] = f"FAILED: {cookie[:50]}..."
+                        results[index - 1] = f"FAILED: {cookie}"
                         failed += 1
                     
                     remaining = len(cookies) - completed
@@ -1030,6 +1030,7 @@ class CookieRefresherGUI:
             
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_file = f"vexcel-{timestamp}.txt"
+            failed_file = f"vexcel-failed-{timestamp}.txt"
             
             with open(output_file, "w", encoding="utf-8") as f:
                 for result in results:
@@ -1038,6 +1039,15 @@ class CookieRefresherGUI:
                             f.write(f"{result}\n")
                         else:
                             f.write(f"_|WARNING:-DO-NOT-SHARE-THIS.--Sharing-this-will-allow-someone-to-log-in-as-you-and-to-steal-your-ROBUX-and-items.|_{result}\n")
+            
+
+            failed_count_to_save = sum(1 for r in results if r and r.startswith("FAILED:"))
+            if failed_count_to_save > 0:
+                with open(failed_file, "w", encoding="utf-8") as f:
+                    for result in results:
+                        if result and result.startswith("FAILED:"):
+                            cookie_part = result.replace("FAILED: ", "")
+                            f.write(f"{cookie_part}\n")
             
             duration = int(time.time() - self.start_time)
             duration_str = str(timedelta(seconds=duration))
@@ -1052,6 +1062,8 @@ class CookieRefresherGUI:
                 self.log(f"✗ Failed: {failed}/{len(cookies)} ({failed/len(cookies)*100:.1f}%)\n", "error")
             self.log(f"⏱ Total time: {duration_str}\n", "info")
             self.log(f"💾 Results saved to: {output_file}\n", "info")
+            if failed_count_to_save > 0:
+                self.log(f"💾 Failed cookies saved to: {failed_file}\n", "info")
             
             self.progress['value'] = 100
             self.progress_label.config(text="100%")
@@ -1060,12 +1072,14 @@ class CookieRefresherGUI:
             self.play_sound("complete")
             self.notify_tray(f"Refresh complete! Success: {successful}/{len(cookies)}")
             
-            messagebox.showinfo("Complete!", 
-                              f"Cookie refresh complete!\n\n"
-                              f"Successful: {successful} ({successful/len(cookies)*100:.1f}%)\n"
-                              f"Failed: {failed} ({failed/len(cookies)*100:.1f}%)\n"
-                              f"Time: {duration_str}\n\n"
-                              f"Results saved to:\n{output_file}")
+            msg = (f"Cookie refresh complete!\n\n"
+                   f"Successful: {successful} ({successful/len(cookies)*100:.1f}%)\n"
+                   f"Failed: {failed} ({failed/len(cookies)*100:.1f}%)\n"
+                   f"Time: {duration_str}\n\n"
+                   f"Results saved to:\n{output_file}")
+            if failed_count_to_save > 0:
+                msg += f"\n\nFailed cookies saved to:\n{failed_file}"
+            messagebox.showinfo("Complete!", msg)
             
         except Exception as e:
             self.log(f"\n\n✗ FATAL ERROR: {str(e)}\n", "error")
